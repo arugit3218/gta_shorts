@@ -23,6 +23,8 @@ It is built for a MacBook Air with an M2 chip and 8 GB of RAM:
 | Storage | Disk checks before every heavy step, storage estimates, a storage page, cleanup, external-SSD working folder, and a retention setting. |
 | Reliability | Persistent job queue, cancellation, resume after restart, atomic outputs, clear errors. |
 
+> **New here?** Follow the step-by-step [SETUP.md](SETUP.md) guide to install ClipStudio on your Mac.
+
 ## Requirements
 
 - **macOS on Apple Silicon** (M1 or later). The speech model uses MLX.
