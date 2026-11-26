@@ -22,6 +22,14 @@ It is built for a MacBook Air with an M2 chip and 8 GB of RAM:
 | Audio | Loudness normalised to −14 LUFS with a limiter. Optional music mix with fades. |
 | Storage | Disk checks before every heavy step, storage estimates, a storage page, cleanup, external-SSD working folder, and a retention setting. |
 | Reliability | Persistent job queue, cancellation, resume after restart, atomic outputs, clear errors. |
+| **Campaigns** | Paste a brief from any clipping site (Clipster is one preset). Logo overlays (pre-placed 1080x1920 template or placed logo), campaign sounds, on-screen disclosure, post captions per platform, and a compliance check before export. |
+| **Export packages** | `clip.mp4`, captions for Reels and Shorts, `checklist.md` and `manifest.json` per clip; "Export approved" for a whole campaign; duplicate-footage memory across campaigns. |
+| **Finishing** | Hook title card, burned-in caption blur, music library by mood (ducked under speech), built-in sound effects placed automatically, bundled fonts (Montserrat, Anton). |
+| **Smart downloads** | Audio first, then only the video sections your clips need. YouTube "Most replayed" data and chapters improve ranking. Bulk links. |
+| **Gameplay & action** | Finds moments from gunfire, explosions, streamer reactions, on-screen action and kill-feed flashes, not just speech. Crops follow the action; streams can stack webcam over gameplay. |
+| **Retention polish** | Dead-air and filler removal (quiet pauses only), punch-in zooms, keyword emphasis and emoji in captions, 12 caption themes, progress bar, hook title styles and templates, cold-open teaser, swear-word beep/mute, speech denoise. Save any look as a **recipe** and apply it to a project in one click. |
+| **Music montages** | Song + several videos → beat-synced 9:16 edits: tempo, beats and drop detected, strongest shot on the drop, POV text, multiple unique variants. |
+| **Quick clip & AI picks** | Clip your own in/out range, or paste a second opinion from any AI chat (ClipStudio builds the prompt; nothing is sent automatically). |
 
 > **New here?** Follow the step-by-step [SETUP.md](SETUP.md) guide to install ClipStudio on your Mac.
 
@@ -68,10 +76,17 @@ cd frontend && npm run dev                       # UI on :5173 (proxies /api)
 
 ## Using it
 
-1. **New project:** upload a file, use a file in place, or paste a link. Check the video details and storage estimate, pick clip length, count, aspect ratio, framing and caption style, then click **Find clips**.
+1. **Create → Clips from a long video:** upload files, use a file in place, or paste links. Pick a **Style** (Talking, Gaming, Hype or Clean) and an editing intensity, then click **Find clips**. Every other setting is under **Customize everything**. **Home** lists what needs you next.
 2. **Processing:** watch each stage with real progress. You can cancel at any time. If you quit mid-job, it resumes on the next start and reuses finished steps.
 3. **Clips:** sorted by score. Open **Why this score** for the breakdown. Approve or reject, download the MP4, or edit.
-4. **Editor:** trim, fix captions, restyle with **Preview captions**, change format, choose a hook, add music, then **Save & render**.
+4. **Editor:** five tabs (Trim, Text, Look, Sound, Check & post). Trim, fix captions, change the look, then **Save & render**.
+
+### Campaigns
+
+1. **Campaigns → New campaign.** Pick the type (Clips, Logo or Music) and paste the brief. **Here's what we understood** shows what changes your videos and what is only for reference. Clipster's rules are added automatically when the brief is from Clipster.
+2. On the campaign page, finish **Setup**: upload the logo and drag it into place on the **Requirements** tab, and check the caption on **Posting**. **Add videos** (files or links) on **Overview**. Music campaigns get **Make a music edit** instead.
+3. Clips follow the campaign's length, logo, sound and caption rules. Open a ready clip and press **Post**: fix anything marked ❌, copy the caption, tick the "you confirm" steps, then **Export**. The export folder includes a `checklist.md`.
+4. **Library** holds your background music (by mood) and optional sound-effect replacements.
 
 ### Saving disk space
 - **Use file in place:** avoids copying videos you already have.

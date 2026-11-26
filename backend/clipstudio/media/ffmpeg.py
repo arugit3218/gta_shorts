@@ -9,6 +9,7 @@ import json
 import logging
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -87,25 +88,28 @@ def run_ffmpeg(
     cmd = [FFMPEG, "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-progress", "pipe:1", "-nostats", *args]
     log.debug("ffmpeg %s", " ".join(cmd))
     cancel.check()
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    cancel.attach(proc)
     stderr_tail: list[str] = []
-    try:
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            if on_progress and duration and line.startswith("out_time_us="):
-                try:
-                    us = int(line.split("=", 1)[1])
-                    on_progress(max(0.0, min(1.0, us / 1e6 / duration)))
-                except ValueError:
-                    pass
-        proc.wait(timeout=timeout)
-        assert proc.stderr is not None
-        stderr_tail = proc.stderr.read().strip().splitlines()[-8:]
-    finally:
-        cancel.detach(proc)
-        if proc.poll() is None:
-            proc.kill()
+    # stderr to a temp file (not a pipe) so a chatty FFmpeg can never block on a full pipe buffer.
+    with tempfile.TemporaryFile(mode="w+") as errf:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=errf, text=True)
+        cancel.attach(proc)
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                if on_progress and duration and line.startswith("out_time_us="):
+                    try:
+                        us = int(line.split("=", 1)[1])
+                        on_progress(max(0.0, min(1.0, us / 1e6 / duration)))
+                    except ValueError:
+                        pass
+            proc.wait(timeout=timeout)
+        finally:
+            cancel.detach(proc)
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        errf.seek(0)
+        stderr_tail = errf.read().strip().splitlines()[-8:]
     if cancel.cancelled:
         raise Cancelled()
     if proc.returncode != 0:

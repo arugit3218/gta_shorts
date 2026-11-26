@@ -92,6 +92,8 @@ META_PHRASES = (
 )
 
 CATEGORY_HASHTAGS = {
+    "Action": ["gaming", "highlights", "clutch"],
+    "Reaction": ["gaming", "reaction", "funny"],
     "Advice": ["advice", "tips"],
     "Story": ["storytime", "story"],
     "Opinion": ["opinion", "debate"],

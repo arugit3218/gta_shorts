@@ -27,6 +27,7 @@ When it finishes, run the two `echo … >> ~/.zprofile` / `eval …` lines it pr
 ```bash
 brew install ffmpeg node git
 ```
+Node.js is also what lets ClipStudio download from YouTube (YouTube needs a JavaScript runtime since late 2025). Deno works too (`brew install deno`). **Settings** and the **Video link** tab warn you if neither is found.
 
 **uv** (installs Python and the Python packages for you):
 ```bash
@@ -88,7 +89,7 @@ uv run --group dev pytest -q          # expect: 33 passed (~20 s)
 ```
 
 Then in the app:
-1. Click **New project**.
+1. Click **Create → Clips from a long video**.
 2. Add a short video of someone talking (5–10 minutes is ideal), using one of:
    - **Use file in place:** paste the file's path. In Finder, select the file and press ⌥⌘C to copy it.
    - **Upload file:** drag the video in.
@@ -109,7 +110,9 @@ Then choose it in **Settings → Transcription model**.
 2. Run `ollama pull qwen2.5:1.5b` (~1 GB).
 3. Turn on **Settings → Optional local AI**.
 
-**Save internal disk space.** Set **Settings → Working directory** to an external drive, for example `/Volumes/MySSD/ClipStudio`.
+**Save internal disk space.** Set **Settings → Working directory** to an external drive, for example `/Volumes/MySSD/ClipStudio`. Keep **Settings → Downloads → Smart** on: links download audio first and then only the video sections your clips need.
+
+**Background music.** Add tracks you own or have a licence for in **Library** (sorted by mood: energetic, calm, dramatic). Without tracks, clips simply have no music.
 
 ## Updating to the latest version
 
@@ -132,6 +135,8 @@ cd frontend && npm install && npm run build && cd ..
 | "Transcription was killed (likely out of memory)" | Close other apps; lower **Settings → Transcription chunk length** to 60 s |
 | Port 8765 already in use | `CLIPSTUDIO_PORT=8770 ./start.sh` |
 | A video link is refused | Only public, downloadable videos work. Download the video yourself (if allowed) and upload it. |
+| YouTube links fail with a "JavaScript"/"challenge" error | Install Node.js or Deno (step 2), run `cd backend && uv sync`, and restart |
+| A smart download falls back to the full video | Normal for sites that don't support partial downloads; or set **Settings → Downloads → Full video** |
 | Anything else | See the log file `data/logs/clipstudio.jsonl`, and [README.md](README.md) for more |
 
 ## What stays on your Mac

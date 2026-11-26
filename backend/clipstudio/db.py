@@ -53,11 +53,49 @@ CREATE TABLE IF NOT EXISTS clips (
     render_path TEXT, thumb_path TEXT, render_error TEXT,
     created_at REAL NOT NULL, updated_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS campaigns (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    brief TEXT NOT NULL DEFAULT '{}',    -- campaign brief JSON (see campaigns/models.py)
+    status TEXT NOT NULL DEFAULT 'active', -- active | archived
+    created_at REAL NOT NULL, updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS exports (
+    id TEXT PRIMARY KEY,
+    clip_id TEXT NOT NULL,
+    campaign_id TEXT,
+    fingerprint TEXT,                   -- source fingerprint (duplicate-content memory)
+    source_key TEXT,                    -- URL or fingerprint, whichever identifies the footage
+    start REAL NOT NULL, "end" REAL NOT NULL,
+    path TEXT,
+    created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS recipes (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    recipe TEXT NOT NULL DEFAULT '{}',  -- JSON: caption preset/style, framing, finishing, polish
+    created_at REAL NOT NULL, updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS posts (
+    clip_id TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+    platform TEXT NOT NULL,             -- reels | shorts
+    url TEXT,                           -- link to the live post (optional)
+    posted_at REAL NOT NULL,
+    PRIMARY KEY (clip_id, platform)
+);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_exports_source ON exports(source_key);
 CREATE INDEX IF NOT EXISTS idx_clips_project ON clips(project_id, rank);
 """
 
-JSON_COLS = {"options", "payload", "stages", "analysis", "meta", "edit"}
+JSON_COLS = {"options", "payload", "stages", "analysis", "meta", "edit", "brief", "extra", "recipe"}
+
+# Columns added after the first release: (table, column, DDL). Applied idempotently at startup.
+MIGRATIONS = [
+    ("projects", "campaign_id", "TEXT"),
+    ("projects", "audio_path", "TEXT"),
+    ("projects", "extra", "TEXT NOT NULL DEFAULT '{}'"),
+]
 
 
 def new_id() -> str:
@@ -82,6 +120,14 @@ class Database:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        with self._lock:
+            for table, col, ddl in MIGRATIONS:
+                cols = {r[1] for r in self._conn.execute(f"PRAGMA table_info({table})").fetchall()}
+                if col not in cols:
+                    self._conn.execute(f'ALTER TABLE {table} ADD COLUMN "{col}" {ddl}')
 
     @contextmanager
     def tx(self) -> Iterator[sqlite3.Connection]:
@@ -117,7 +163,7 @@ class Database:
         self.execute(f"INSERT INTO {table} ({cols}) VALUES ({qs})", tuple(v.values()))
 
     def update(self, table: str, row_id: str, values: dict[str, Any]) -> None:
-        if table in ("projects", "clips"):
+        if table in ("projects", "clips", "campaigns"):
             values = values | {"updated_at": time.time()}
         v = self._encode(values)
         sets = ", ".join(f'"{c}" = ?' for c in v)

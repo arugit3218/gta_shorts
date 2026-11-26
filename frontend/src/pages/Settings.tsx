@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { Link, useBlocker, useSearchParams } from "react-router-dom";
 import { api } from "../api";
+import { DEFAULT_POLISH, PolishControls, RecipeManager } from "../components/polish";
 import { Icon } from "../components/Icon";
-import { Alert, Spinner, useToast } from "../components/ui";
+import { Alert, Modal, Spinner, useToast } from "../components/ui";
 import { fmtMB } from "../format";
 import { usePoll } from "../hooks";
 import type { Settings } from "../types";
@@ -28,14 +30,34 @@ export default function SettingsPage() {
   const models = usePoll(api.models, []).data;
   const [s, setS] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
+  const [params, setParams] = useSearchParams();
+  const view = params.get("view") === "advanced" ? "advanced" : "basic";
+
   useEffect(() => {
     if (q.data) setS(q.data);
   }, [q.data]);
+  const dirty = !!s && !!q.data && JSON.stringify(s) !== JSON.stringify(q.data);
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && currentLocation.pathname !== nextLocation.pathname);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
   if (!s) return <div className="skeleton" style={{ height: 300 }} />;
 
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setS({ ...s, [k]: v });
-  const dirty = JSON.stringify(s) !== JSON.stringify(q.data);
-  const save = async (patch: Partial<Settings> = s) => {
+  // send only what changed, so the server can apply a processing mode's own values (resolution, local AI)
+  const changed = (): Partial<Settings> => {
+    const out: Record<string, unknown> = {};
+    const before = (q.data ?? {}) as unknown as Record<string, unknown>;
+    for (const [k, v] of Object.entries(s)) if (JSON.stringify(v) !== JSON.stringify(before[k])) out[k] = v;
+    return out as Partial<Settings>;
+  };
+  const save = async (patch: Partial<Settings> = changed()) => {
     setSaving(true);
     try {
       const n = await api.saveSettings(patch);
@@ -62,7 +84,61 @@ export default function SettingsPage() {
           {saving ? <Spinner /> : <Icon name="check" />} Save changes
         </button>
       </div>
+      {dirty && (
+        <div className="save-bar" role="status">
+          <span>
+            <Icon name="edit" /> Unsaved changes
+          </span>
+          <span className="row">
+            <button className="btn sm ghost" onClick={() => q.data && setS(q.data)}>
+              Discard
+            </button>
+            <button className="btn sm primary" onClick={() => save()} disabled={saving}>
+              {saving ? <Spinner /> : <Icon name="check" />} Save changes
+            </button>
+          </span>
+        </div>
+      )}
+      <p className="small muted" style={{ margin: 0 }}>
+        These are your defaults. A campaign can change them for its own videos (Change style, Requirements), and a video or clip can change them again.
+      </p>
+      {blocker.state === "blocked" && (
+        <Modal
+          title="Leave without saving?"
+          onClose={() => blocker.reset()}
+          actions={
+            <>
+              <button className="btn" onClick={() => blocker.reset()}>
+                Stay
+              </button>
+              <button className="btn danger" onClick={() => blocker.proceed()}>
+                Discard changes
+              </button>
+              <button className="btn primary" onClick={async () => (await save(), blocker.proceed())}>
+                Save &amp; leave
+              </button>
+            </>
+          }
+        >
+          <p className="muted">Your settings changes aren't saved yet.</p>
+        </Modal>
+      )}
 
+      <div className="tabs" role="tablist" aria-label="Settings">
+        {(
+          [
+            ["basic", "Basics"],
+            ["advanced", "Advanced"],
+          ] as const
+        ).map(([k, l]) => (
+          <button key={k} role="tab" aria-selected={view === k} className={view === k ? "active" : ""} onClick={() => setParams(k === "basic" ? {} : { view: k }, { replace: true })}>
+            {l}
+          </button>
+        ))}
+      </div>
+      {view === "advanced" && <p className="small muted" style={{ marginTop: -8 }}>Fine-tuning for models, downloads, framing, detection and scoring. The defaults work well; change these only if you have a reason.</p>}
+
+      {view === "basic" && (
       <section className="card">
         <div className="card-head">
           <h2>Processing mode</h2>
@@ -84,7 +160,9 @@ export default function SettingsPage() {
           {s.mode === "high" && ramGb <= 8 && <Alert kind="warn">High quality mode on an 8 GB Mac may slow things down. Close browsers and other heavy apps while processing.</Alert>}
         </div>
       </section>
+      )}
 
+      {view === "advanced" && (
       <section className="card">
         <div className="card-head">
           <h2>Models</h2>
@@ -138,7 +216,9 @@ export default function SettingsPage() {
           </div>
         </div>
       </section>
+      )}
 
+      {view === "basic" && (
       <section className="card">
         <div className="card-head">
           <h2>Clip defaults</h2>
@@ -187,7 +267,189 @@ export default function SettingsPage() {
           </label>
         </div>
       </section>
+      )}
 
+      {view === "advanced" && (
+      <section className="card">
+        <div className="card-head">
+          <h2>Downloads (video links)</h2>
+        </div>
+        <div className="card-body stack">
+          {(
+            [
+              ["smart", "Smart: audio first, then only the parts clips need", "Downloads the audio (~1 MB/min), finds clips, then fetches just those sections of video (each clip ± 20 s for trimming). Uses a fraction of the disk. Falls back to the full video automatically if a site doesn't support it."],
+              ["full", "Full video", "Downloads the whole video up front. Uses more disk, but you can add clips anywhere later without another download."],
+            ] as const
+          ).map(([k, l, d]) => (
+            <label key={k} className={`hook-option ${s.download_strategy === k ? "active" : ""}`}>
+              <input type="radio" name="dl" checked={s.download_strategy === k} onChange={() => set("download_strategy", k)} />
+              <span>
+                <strong>{l}</strong>
+                <br />
+                <span className="small muted">{d}</span>
+              </span>
+            </label>
+          ))}
+          <label className="check">
+            <input type="checkbox" checked={s.use_heatmap} onChange={(e) => set("use_heatmap", e.target.checked)} />
+            <span>
+              Use YouTube's <strong>“Most replayed”</strong> graph when ranking clips
+              <br />
+              <span className="small muted">Real viewer behaviour; adds up to +10 points to parts people re-watch. Only some videos have it.</span>
+            </span>
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={s.use_creator_subtitles} onChange={(e) => set("use_creator_subtitles", e.target.checked)} />
+            <span>
+              Use the uploader's own English subtitles instead of transcribing
+              <br />
+              <span className="small muted">Much faster and no speech model, but word timing is estimated (captions a bit less tight). Auto-generated subtitles are never used.</span>
+            </span>
+          </label>
+        </div>
+      </section>
+      )}
+
+      {view === "advanced" && (
+      <section className="card">
+        <div className="card-head">
+          <h2>Framing (Auto)</h2>
+        </div>
+        <div className="card-body stack">
+          <span className="label-text">When there's no big face to follow</span>
+          <div className="seg">
+            <button className={s.auto_fallback === "fill" ? "active" : ""} onClick={() => set("auto_fallback", "fill")}>
+              Fill the frame (crop)
+            </button>
+            <button className={s.auto_fallback === "blur" ? "active" : ""} onClick={() => set("auto_fallback", "blur")}>
+              Whole frame + blurred bars
+            </button>
+          </div>
+          <label className="check">
+            <input type="checkbox" checked={s.follow_action} onChange={(e) => set("follow_action", e.target.checked)} />
+            <span>
+              <strong>Follow the action</strong> in fill crops
+              <br />
+              <span className="small muted">The crop drifts slowly towards where the motion is (no faces needed), instead of staying in the centre.</span>
+            </span>
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={s.auto_stream} onChange={(e) => set("auto_stream", e.target.checked)} />
+            <span>
+              Detect a streamer's webcam and use <strong>webcam + gameplay</strong> stacking
+              <br />
+              <span className="small muted">A small face that stays in a corner is treated as a webcam overlay. Mark it exactly per project with Framing.</span>
+            </span>
+          </label>
+        </div>
+      </section>
+      )}
+
+      {view === "advanced" && (
+      <section className="card">
+        <div className="card-head">
+          <h2>Gameplay &amp; action detection</h2>
+        </div>
+        <div className="card-body stack">
+          <div className="field">
+            <span className="label-text">Default content type</span>
+            <div className="seg">
+              {(
+                [
+                  ["auto", "Auto"],
+                  ["talk", "Talk"],
+                  ["gameplay", "Gameplay / action"],
+                ] as const
+              ).map(([k, l]) => (
+                <button key={k} className={s.content_type === k ? "active" : ""} onClick={() => set("content_type", k)}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            <span className="hint">Auto treats videos with fewer than ~110 spoken words per minute as gameplay.</span>
+          </div>
+          <span className="label-text">What counts as an action moment</span>
+          {(
+            [
+              ["audio", "Game audio spikes (gunfire, explosions, impacts)"],
+              ["motion", "Fast on-screen action"],
+              ["reaction", "Streamer reactions (shouting, laughing, “let's go”)"],
+              ["hud", "Kill feed / HUD flashes (top-right corner)"],
+            ] as const
+          ).map(([k, l]) => (
+            <div className="crit" key={k} style={{ gridTemplateColumns: "260px 1fr 40px" }}>
+              <span>{l}</span>
+              <input type="range" min={0} max={60} value={s.action_weights[k]} onChange={(e) => set("action_weights", { ...s.action_weights, [k]: +e.target.value })} />
+              <span className="small" style={{ textAlign: "right" }}>{s.action_weights[k]}</span>
+            </div>
+          ))}
+          <p className="small muted">Tune these after testing on your own streams. For example, raise “reactions” if your best clips are where you shout.</p>
+        </div>
+      </section>
+      )}
+
+      {view === "advanced" && (
+      <section className="card">
+        <div className="card-head">
+          <h2>Finishing defaults</h2>
+          <span className="small muted">For new projects; each clip can override. Campaigns can forbid music and effects.</span>
+        </div>
+        <div className="card-body grid cols-2">
+          <label className="check">
+            <input type="checkbox" checked={s.hook_overlay_default} onChange={(e) => set("hook_overlay_default", e.target.checked)} />
+            <span>Hook title card at the start</span>
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={s.sfx_default} onChange={(e) => set("sfx_default", e.target.checked)} />
+            <span>Automatic sound effects</span>
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={s.music_default === "auto"} onChange={(e) => set("music_default", e.target.checked ? "auto" : "none")} />
+            <span>
+              Background music from the Library (ducked under speech)
+            </span>
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={s.blur_burned_default === "auto"} onChange={(e) => set("blur_burned_default", e.target.checked ? "auto" : "off")} />
+            <span>Blur the source's burned-in captions</span>
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={s.voice_enhance} onChange={(e) => set("voice_enhance", e.target.checked)} />
+            <span>
+              Voice clean-up
+              <br />
+              <span className="small muted">Removes low rumble and evens out loud/quiet speech.</span>
+            </span>
+          </label>
+        </div>
+      </section>
+      )}
+
+      {view === "advanced" && (
+      <section className="card">
+        <div className="card-head">
+          <h2>Editing details (defaults)</h2>
+          <span className="small muted">Defaults for new projects. Each project, clip or recipe can change them.</span>
+        </div>
+        <div className="card-body">
+          <PolishControls value={{ ...DEFAULT_POLISH, ...s.polish }} onChange={(p) => set("polish", { ...DEFAULT_POLISH, ...s.polish, ...p })} />
+        </div>
+      </section>
+      )}
+
+      {view === "advanced" && (
+      <section className="card">
+        <div className="card-head">
+          <h2>Recipes</h2>
+          <span className="small muted">Saved looks: caption style, framing, finishing and polish — applied in one click.</span>
+        </div>
+        <div className="card-body">
+          <RecipeManager defaults={{ caption_preset: s.caption_preset, layout: s.layout, polish: { ...DEFAULT_POLISH, ...s.polish } }} />
+        </div>
+      </section>
+      )}
+
+      {view === "advanced" && (
       <section className="card">
         <div className="card-head">
           <h2>Scoring weights</h2>
@@ -206,10 +468,15 @@ export default function SettingsPage() {
           <p className="small muted">Scores are rule-based estimates for ranking clips. They are not predictions of views. Weights apply to new analyses.</p>
         </div>
       </section>
+      )}
 
+      {view === "basic" && (
       <section className="card">
         <div className="card-head">
           <h2>Storage</h2>
+          <Link className="btn sm" to="/storage">
+            <Icon name="disk" /> See what's using space
+          </Link>
         </div>
         <div className="card-body stack lg">
           <div className="field">
@@ -234,6 +501,7 @@ export default function SettingsPage() {
           </div>
         </div>
       </section>
+      )}
     </div>
   );
 }

@@ -8,15 +8,17 @@ from ..db import Database
 
 PROCESS_STAGES: list[tuple[str, str, float]] = [
     # key, label, weight in overall progress
-    ("download", "Downloading video", 0.12),
+    ("download", "Downloading", 0.10),
     ("audio", "Extracting audio", 0.04),
-    ("transcribe", "Transcribing", 0.34),
+    ("transcribe", "Transcribing", 0.30),
     ("analyse", "Analysing transcript", 0.03),
+    ("action", "Analysing action", 0.06),
     ("highlights", "Identifying highlights", 0.03),
     ("score", "Scoring candidates", 0.02),
     ("metadata", "Generating titles & hooks", 0.04),
     ("captions", "Generating captions", 0.02),
-    ("render", "Rendering clips", 0.36),
+    ("sections", "Downloading clip sections", 0.06),
+    ("render", "Rendering clips", 0.30),
 ]
 RENDER_STAGES: list[tuple[str, str, float]] = [("render", "Rendering clip", 1.0)]
 

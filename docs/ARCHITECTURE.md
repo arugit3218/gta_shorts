@@ -42,13 +42,19 @@ backend/clipstudio/
   storage.py         free space, estimates, fingerprinting, size accounting
   cancel.py          CancelToken (cooperative + kills subprocesses)
   transcription/     types, service (cache, availability), parakeet_worker (child process)
-  analysis/          lexicon, segmentation (TextTiling), scoring, highlights, metadata, audio_features
-  media/             ffmpeg (probe/run), download (yt-dlp), reframe, captions, render
+  analysis/          lexicon, segmentation (TextTiling), scoring, highlights (+ heatmap/chapters, score_range),
+                     metadata, audio_features, ai_picks (prompt builder + answer parser)
+  campaigns/         models (Brief), presets (generic + Clipster), parser (paste-to-fill), safezones,
+                     post (caption builder), compliance (checker), service (per-clip features, export)
+  media/             ffmpeg (probe/run), download (yt-dlp: full/audio/section/subtitles), align (section
+                     offset by audio correlation), reframe, captions, overlays (hook/disclosure), logo,
+                     burned_text (detect + blur), sfx (synth + placement), library (music by mood), render
   llm/ollama.py      optional local LLM with grounding validation
   jobs/              pipeline, worker, progress
-  api/               app factory, routes (projects, clips, system), schemas, input validation
+  api/               app factory, routes (projects, clips, system, campaigns, library), schemas, validation
 backend/tests/       unit + integration tests
-frontend/src/        pages (Dashboard, NewProject, Projects, ProjectView, ClipEditor, Settings, Storage), api.ts, components
+frontend/src/        pages (Dashboard, NewProject, Projects, ProjectView, ClipEditor, Campaigns, CampaignView,
+                     Library, Settings, Storage), api.ts, components (ui, campaign)
 ```
 
 ## Scoring model
@@ -83,3 +89,21 @@ The total is a weighted sum, minus penalties for filler-heavy or repetitive wind
 ## Job lifecycle
 
 `queued → running → done | failed | cancelled`. On startup, `running` becomes `queued` again. Every stage is cached by video fingerprint: download (by URL hash), transcript, audio profile. A resumed job therefore skips the work it already finished.
+
+## Campaign layer (Phase 1)
+
+```
+Brief (any site) ──paste-to-fill──► campaigns table ◄── presets (generic, Clipster…)
+      │
+project.campaign_id ──► features(clip) = clip edit → project options → settings, then campaign rules win
+      │                     (logo, disclosure, sound, hook title, music/SFX allowed?)
+      ▼
+render graph:  source → [burned-text blur] → reframe → captions → hook/disclosure → logo/template
+               voice clean-up + ducked music + campaign sound + SFX → −14 LUFS
+      ▼
+compliance(clip) ─► pass / warn / fail / manual checks ─► export package (+ exports table = duplicate memory)
+```
+
+- **Platform-neutral:** nothing in the engine is site-specific. Site rules live in presets and the brief.
+- **Smart downloads:** `audio_path` on the project, `sections.json` + `sections/` in the project folder. `media_for_clip()` returns the full source or the section covering a clip (with its offset). Rendering, preview frames and the editor's source player all use it.
+- **Effective settings** are computed per clip (`campaigns/service.features`) and returned to the UI as `clip.features`, so the editor always shows what will actually render.

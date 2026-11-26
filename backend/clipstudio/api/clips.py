@@ -13,14 +13,17 @@ from fastapi.responses import FileResponse, Response
 
 from ..context import AppContext
 from ..errors import InvalidInput, NotFound
-from ..jobs.pipeline import clip_words, render_spec
+from ..campaigns import posting
+from ..campaigns import service as campaign_service
+from ..campaigns.service import campaign_brief, features
+from ..jobs.pipeline import clip_words, find_section, media_for_clip, render_spec
 from ..jobs.worker import Worker
 from ..media.captions import PRESETS, CapWord, resolve_style
 from ..media.render import render_preview_frame
 from ..storage import GB, MB, ensure_space
 from ..transcription.types import Transcript
 from .deps import ctx, get_clip, get_project, worker
-from .schemas import ClipPatch, PreviewFrame
+from .schemas import ClipPatch, PostMark, PreviewFrame
 from .sources import AUDIO_EXTS, safe_filename
 
 router = APIRouter(prefix="/api", tags=["clips"])
@@ -28,7 +31,7 @@ router = APIRouter(prefix="/api", tags=["clips"])
 RENDER_AFFECTING = {"start", "end", "edit", "caption_words", "reset_captions", "remove_music"}
 
 
-def public_clip(c: dict) -> dict:
+def public_clip(c: dict, feat: dict | None = None, *, posted: dict | None = None, platforms: list[str] | None = None) -> dict:
     out = {k: c[k] for k in ("id", "project_id", "rank", "start", "end", "score", "title", "hook", "description", "category", "status", "render_status", "render_error", "created_at", "updated_at")}
     out["duration"] = round(c["end"] - c["start"], 2)
     out["analysis"] = c["analysis"]
@@ -37,23 +40,37 @@ def public_clip(c: dict) -> dict:
     edit = dict(c["edit"])
     edit.pop("caption_words", None)
     edit["has_caption_edits"] = bool(c["edit"].get("caption_words"))
-    edit["music"] = Path(edit.pop("music_path")).name if edit.get("music_path") else None
+    edit["music_file"] = Path(edit.pop("music_path")).name if edit.get("music_path") else None
     out["edit"] = edit
     out["has_video"] = bool(c["render_path"]) and Path(c["render_path"]).exists()
     out["has_thumb"] = bool(c["thumb_path"]) and Path(c["thumb_path"]).exists()
     out["version"] = int(c["updated_at"] * 1000)
+    out["exported"] = c["meta"].get("exported")
+    out["posted"] = posted or {}
+    if platforms is not None:
+        out["post_platforms"] = platforms
+    if feat is not None:
+        out["features"] = feat
     return out
+
+
+def _with_features(c: AppContext, project: dict, clips: list[dict]) -> list[dict]:
+    _, brief = campaign_brief(c, project)
+    posted = posting.posted_map(c.db, [x["id"] for x in clips])
+    plats = posting.platforms_of(brief)
+    return [public_clip(x, features(c, project, x, brief), posted=posted.get(x["id"]), platforms=plats) for x in clips]
 
 
 @router.get("/projects/{project_id}/clips")
 def list_clips(project_id: str, c: AppContext = Depends(ctx)):
-    get_project(c, project_id)
-    return [public_clip(x) for x in c.db.query("SELECT * FROM clips WHERE project_id = ? ORDER BY rank", (project_id,))]
+    p = get_project(c, project_id)
+    return _with_features(c, p, c.db.query("SELECT * FROM clips WHERE project_id = ? ORDER BY rank", (project_id,)))
 
 
 @router.get("/clips/{clip_id}")
 def clip_detail(clip_id: str, c: AppContext = Depends(ctx)):
-    return public_clip(get_clip(c, clip_id))
+    clip = get_clip(c, clip_id)
+    return _with_features(c, get_project(c, clip["project_id"]), [clip])[0]
 
 
 @router.get("/clips/{clip_id}/words")
@@ -68,7 +85,13 @@ def clip_words_api(clip_id: str, context: float = Query(15.0, ge=0, le=120), c: 
         t = Transcript.from_dict(json.loads(tpath.read_text()))
         lo, hi = clip["start"] - context, clip["end"] + context
         around = [{"w": w.w, "s": w.s, "e": w.e} for w in t.words if w.e >= lo and w.s <= hi]
-    return {"start": clip["start"], "end": clip["end"], "words": words, "context_words": around, "edited": bool(clip["edit"].get("caption_words")), "source_duration": project["duration"]}
+    # The editor plays either the full source or (smart downloads) the section around this clip.
+    offset, lo_lim, hi_lim = 0.0, 0.0, project["duration"]
+    if not (project["source_path"] and Path(project["source_path"]).exists()):
+        sec = find_section(c, project, clip["start"], clip["end"])
+        if sec:
+            offset, lo_lim, hi_lim = sec["start"], sec["start"], sec["end"]
+    return {"start": clip["start"], "end": clip["end"], "words": words, "context_words": around, "edited": bool(clip["edit"].get("caption_words")), "source_duration": project["duration"], "source_offset": offset, "source_range": [lo_lim, hi_lim]}
 
 
 @router.patch("/clips/{clip_id}")
@@ -100,6 +123,15 @@ def patch_clip(clip_id: str, body: ClipPatch, c: AppContext = Depends(ctx)):
             raise InvalidInput("Unknown caption preset")
         if "caption_style" in e:
             e["caption_style"] = {k: v for k, v in e["caption_style"].items() if v is not None}
+        if "post" in e:
+            e["post"] = {k: v for k, v in (edit.get("post") or {}).items()} | {k: v for k, v in e["post"].items() if v is not None}
+            e["post"] = {k: v for k, v in e["post"].items() if v}
+        if "polish" in e:
+            e["polish"] = (edit.get("polish") or {}) | {k: v for k, v in e["polish"].items() if v is not None}
+        if "hook_overlay" in e:
+            e["hook_overlay"] = (edit.get("hook_overlay") or {}) | {k: v for k, v in e["hook_overlay"].items() if v is not None}
+        if "music" in e and e["music"] != "upload" and edit.get("music_path"):
+            Path(edit.pop("music_path")).unlink(missing_ok=True)
         if "caption_preset" in e and "caption_style" not in e:
             edit.pop("caption_style", None)  # picking a preset resets custom overrides
         edit |= e
@@ -112,11 +144,12 @@ def patch_clip(clip_id: str, body: ClipPatch, c: AppContext = Depends(ctx)):
         Path(edit.pop("music_path")).unlink(missing_ok=True)
     if edit != clip["edit"]:
         upd["edit"] = edit
-    if any(k in upd for k in ("start", "end", "edit")) and clip["render_status"] in ("done", "failed"):
+    video_changed = "start" in upd or "end" in upd or ({k: v for k, v in edit.items() if k != "post"} != {k: v for k, v in clip["edit"].items() if k != "post"})
+    if video_changed and clip["render_status"] in ("done", "failed"):
         upd["render_status"] = "stale"
     if upd:
         c.db.update("clips", clip_id, upd)
-    return public_clip(get_clip(c, clip_id))
+    return clip_detail(clip_id, c)
 
 
 @router.post("/clips/{clip_id}/render")
@@ -143,7 +176,7 @@ def preview_frame(clip_id: str, body: PreviewFrame, c: AppContext = Depends(ctx)
     if body.caption_words is not None:
         edit["caption_words"] = [w.model_dump() for w in body.caption_words]
     tmp_clip["edit"] = edit
-    spec = render_spec(c, project, tmp_clip)
+    spec = render_spec(c, project, tmp_clip, for_preview=True)
     spec.layout = edit.get("layout", "center")
     t = min(body.t, max(0.0, spec.duration - 0.1))
     out_dir = c.paths.temp_dir(project["id"])
@@ -205,9 +238,81 @@ async def upload_music(clip_id: str, request: Request, filename: str = Query(...
     if edit.get("music_path") and edit["music_path"] != str(dest):
         Path(edit["music_path"]).unlink(missing_ok=True)
     edit["music_path"] = str(dest)
-    edit.setdefault("music_volume", 0.12)
+    edit["music"] = "upload"
+    edit.setdefault("music_volume", 0.25)
     c.db.update("clips", clip_id, {"edit": edit, "render_status": "stale" if clip["render_status"] in ("done", "failed") else clip["render_status"]})
-    return public_clip(get_clip(c, clip_id))
+    return clip_detail(clip_id, c)
+
+
+@router.get("/clips/{clip_id}/source-info")
+def clip_source_info(clip_id: str, c: AppContext = Depends(ctx)):
+    """Where the clip sits in the playable source file (to preview a clip before it's rendered)."""
+    clip = get_clip(c, clip_id)
+    project = get_project(c, clip["project_id"])
+    try:
+        _, offset, *_ = media_for_clip(c, project, clip["start"], clip["end"])
+    except Exception as e:  # noqa: BLE001 - a missing section is a normal state here
+        return {"available": False, "reason": str(e)}
+    return {"available": True, "start": round(clip["start"] - offset, 3), "end": round(clip["end"] - offset, 3)}
+
+
+@router.get("/clips/{clip_id}/source")
+def clip_source(clip_id: str, c: AppContext = Depends(ctx)):
+    """Video the editor plays for trimming: the full source, or the downloaded section around the clip."""
+    clip = get_clip(c, clip_id)
+    project = get_project(c, clip["project_id"])
+    path, *_ = media_for_clip(c, project, clip["start"], clip["end"])
+    return FileResponse(path, media_type="video/mp4")
+
+
+@router.get("/clips/{clip_id}/compliance")
+def clip_compliance(clip_id: str, c: AppContext = Depends(ctx)):
+    clip = get_clip(c, clip_id)
+    return campaign_service.compliance(c, get_project(c, clip["project_id"]), clip)
+
+
+@router.post("/clips/{clip_id}/export")
+def export_clip(clip_id: str, c: AppContext = Depends(ctx)):
+    clip = get_clip(c, clip_id)
+    return campaign_service.export_clip(c, get_project(c, clip["project_id"]), clip)
+
+
+@router.get("/clips/{clip_id}/export.zip")
+def export_zip(clip_id: str, c: AppContext = Depends(ctx)):
+    from starlette.background import BackgroundTask
+
+    clip = get_clip(c, clip_id)
+    project = get_project(c, clip["project_id"])
+    exp = (clip["meta"] or {}).get("exported")
+    # rebuild when the clip (video, caption, title) changed after the last export, so the zip is never stale
+    if not exp or not Path(exp["path"]).exists() or float(clip.get("updated_at") or 0) > float(exp.get("at") or 0) + 2:  # +2 s: saving the export itself touches the clip
+        exp = campaign_service.export_clip(c, project, clip)
+    folder = Path(exp["path"])
+    tmp_dir = c.paths.temp_dir(project["id"])
+    dest = tmp_dir / f"{folder.name}.zip"
+    campaign_service.zip_export(folder, dest)
+    return FileResponse(dest, media_type="application/zip", filename=f"{folder.name}.zip", background=BackgroundTask(lambda: dest.unlink(missing_ok=True)))
+
+
+# ---------------------------------------------------------------------------------- posted
+@router.put("/clips/{clip_id}/posts/{platform}")
+def mark_posted(clip_id: str, platform: str, body: PostMark, c: AppContext = Depends(ctx)):
+    """Mark the clip as posted on one platform (optionally with the post's link)."""
+    clip = get_clip(c, clip_id)
+    if platform not in posting.ALL_PLATFORMS:
+        raise InvalidInput(f"Unknown platform: {platform}")
+    url = (body.url or "").strip()
+    if url and not re.match(r"^https?://\S+$", url):
+        raise InvalidInput("The post link should start with http:// or https://")
+    posting.mark(c.db, clip["id"], platform, url or None)
+    return {"posted": posting.posted_map(c.db, [clip["id"]]).get(clip["id"], {})}
+
+
+@router.delete("/clips/{clip_id}/posts/{platform}")
+def unmark_posted(clip_id: str, platform: str, c: AppContext = Depends(ctx)):
+    clip = get_clip(c, clip_id)
+    posting.unmark(c.db, clip["id"], platform)
+    return {"posted": posting.posted_map(c.db, [clip["id"]]).get(clip["id"], {})}
 
 
 @router.get("/caption-presets")

@@ -43,7 +43,21 @@ def system(c: AppContext = Depends(ctx), w: Worker = Depends(worker)):
         "worker": {"current_job": cur, "queued": queued["n"] if queued else 0},
         "work_dir": str(c.paths.work),
         "privacy": {"bind": c.env.host, "model_downloads": c.env.allow_model_downloads, "llm_enabled": s.llm_enabled},
+        "downloads": _download_tools(),
     }
+
+
+def _download_tools() -> dict:
+    from ..media.download import js_runtimes
+
+    try:
+        import yt_dlp_ejs  # noqa: F401
+
+        ejs = True
+    except ImportError:
+        ejs = False
+    rt = js_runtimes()
+    return {"js_runtime": next(iter(rt), None), "ejs": ejs, "youtube_ready": bool(rt) and ejs}
 
 
 @router.get("/dashboard")
@@ -51,10 +65,10 @@ def dashboard(c: AppContext = Depends(ctx), w: Worker = Depends(worker)):
     from .projects import _public
 
     db = c.db
-    projects = db.one("SELECT COUNT(*) AS n, SUM(status = 'ready') AS ready FROM projects") or {}
+    projects = db.one("SELECT COUNT(*) AS n, SUM(status = 'ready') AS ready FROM projects WHERE status != 'new'") or {}
     clips = db.one("SELECT COUNT(*) AS n, SUM(render_status = 'done') AS rendered, SUM(status = 'approved') AS approved FROM clips") or {}
     minutes = db.one("SELECT SUM(duration) AS s FROM projects WHERE status = 'ready'") or {}
-    recent = [_public(c, p) for p in db.query("SELECT * FROM projects ORDER BY updated_at DESC LIMIT 6")]
+    recent = [_public(c, p) for p in db.query("SELECT * FROM projects WHERE status != 'new' ORDER BY updated_at DESC LIMIT 6")]  # only started work
     active = [_job_public(j) | {"project_id": j["project_id"]} for j in db.query("SELECT * FROM jobs WHERE status IN ('running','queued') ORDER BY created_at")]
     return {
         "projects": projects.get("n") or 0,
@@ -66,6 +80,68 @@ def dashboard(c: AppContext = Depends(ctx), w: Worker = Depends(worker)):
         "recent": recent,
         "active_jobs": active,
         "disk_free_mb": round(free_bytes(c.paths.work) / MB),
+        "todo": _todo(c),
+        "campaigns": (db.one("SELECT COUNT(*) AS n FROM campaigns WHERE status = 'active'") or {}).get("n") or 0,
+    }
+
+
+def _todo(c: AppContext) -> dict:
+    """What needs the user's attention, for the Home to-do list (R3)."""
+    from pathlib import Path as _P
+
+    from ..campaigns.models import Brief
+    from ..campaigns.posting import done_ids
+    from .projects import montage_refs, stage_of
+
+    db = c.db
+    review = db.query(
+        "SELECT p.id AS project_id, p.name, cp.name AS campaign, COUNT(cl.id) AS n FROM clips cl JOIN projects p ON p.id = cl.project_id LEFT JOIN campaigns cp ON cp.id = p.campaign_id "
+        "WHERE cl.status = 'candidate' AND p.status = 'ready' GROUP BY p.id ORDER BY MAX(cl.created_at) DESC LIMIT 10"
+    )
+    done = done_ids(db)  # posted on every platform it needs: no need to re-render or post again
+    render_by: dict = {}
+    for r in db.query(
+        "SELECT cl.id, cl.updated_at, p.id AS project_id, p.name, cp.name AS campaign FROM clips cl JOIN projects p ON p.id = cl.project_id LEFT JOIN campaigns cp ON cp.id = p.campaign_id "
+        "WHERE cl.status = 'approved' AND cl.render_status IN ('pending','stale') ORDER BY cl.updated_at DESC"
+    ):
+        if r["id"] not in done:
+            e = render_by.setdefault(r["project_id"], {"project_id": r["project_id"], "name": r["name"], "campaign": r["campaign"], "n": 0})
+            e["n"] += 1
+    render = list(render_by.values())[:10]
+    failed_renders = db.query(
+        "SELECT cl.id, cl.title, cl.project_id FROM clips cl WHERE cl.render_status = 'failed' ORDER BY cl.updated_at DESC LIMIT 6"
+    )
+    # ready to post = approved, rendered and not yet marked posted on every platform it needs
+    counts: dict = {}
+    for r in db.query(
+        "SELECT cl.id, p.campaign_id, cp.name FROM clips cl JOIN projects p ON p.id = cl.project_id LEFT JOIN campaigns cp ON cp.id = p.campaign_id "
+        "WHERE cl.status = 'approved' AND cl.render_status = 'done' AND (cp.id IS NULL OR cp.status = 'active')"  # archived campaigns don't nag
+    ):
+        if r["id"] not in done:
+            e = counts.setdefault(r["campaign_id"], {"campaign_id": r["campaign_id"], "name": r["name"], "n": 0})
+            e["n"] += 1
+    ready = sorted(counts.values(), key=lambda e: -e["n"])[:6]
+    failed_videos = db.query("SELECT id, name, error FROM projects WHERE status = 'failed' ORDER BY updated_at DESC LIMIT 4")
+    refs = montage_refs(c)
+    not_started = sum(1 for p in db.query("SELECT id, status, source_type FROM projects WHERE status = 'new'") if stage_of(p, refs) == "not_started")
+    setup = []
+    for row in db.query("SELECT id, name, brief FROM campaigns WHERE status = 'active' ORDER BY updated_at DESC"):
+        b = Brief.model_validate(row["brief"])
+        missing = []
+        if (b.type == "logo" or b.logo.mode != "none") and not (b.logo.file and _P(b.logo.file).exists()):
+            missing.append("the logo file")
+        if b.sound_rule.mode == "burn" and not any(x.file for x in b.sounds):
+            missing.append("the sound file")
+        if missing:
+            setup.append({"campaign_id": row["id"], "name": row["name"], "missing": missing})
+    return {
+        "review": review,
+        "render": render,
+        "failed_renders": failed_renders,
+        "ready": ready,
+        "failed_videos": failed_videos,
+        "not_started": not_started,
+        "campaign_setup": setup[:6],
     }
 
 
@@ -146,24 +222,32 @@ def cancel_job(job_id: str, w: Worker = Depends(worker)):
 # ---------------------------------------------------------------------------------- storage
 def _storage_items(c: AppContext) -> dict:
     work = c.paths.work
+    from .projects import montage_refs, stage_of
+
+    refs = montage_refs(c)
     projects = []
-    for p in c.db.query("SELECT id, name, source_path, source_owned FROM projects ORDER BY created_at DESC"):
+    for p in c.db.query("SELECT id, name, status, source_type, source_path, audio_path, source_owned FROM projects ORDER BY created_at DESC"):
         pdir = work / "projects" / p["id"]
         src = Path(p["source_path"]) if p["source_path"] else None
+        aud = Path(p["audio_path"]) if p["audio_path"] else None
+        aud_mb = round(aud.stat().st_size / MB, 1) if aud and aud.exists() and p["source_owned"] else 0
         projects.append(
             {
                 "id": p["id"],
                 "name": p["name"],
+                "stage": stage_of(p, refs),
                 "clips_mb": round(dir_size(pdir / "clips") / MB, 1),
                 "other_mb": round((dir_size(pdir) - dir_size(pdir / "clips")) / MB, 1),
-                "source_mb": round(src.stat().st_size / MB, 1) if src and src.exists() and p["source_owned"] else 0,
+                "source_mb": round((src.stat().st_size / MB if src and src.exists() and p["source_owned"] else 0) + aud_mb, 1),
                 "source_owned": bool(p["source_owned"]),
-                "source_exists": bool(src and src.exists()),
+                "source_exists": bool((src and src.exists()) or (aud and aud.exists())),
+                "smart": bool(aud and aud.exists() and not (src and src.exists())),
             }
         )
     temp = sum(dir_size(d) for d in (work / "projects").glob("*/tmp")) if (work / "projects").exists() else 0
     partial = sum(f.stat().st_size for f in work.rglob("*.part*") if f.is_file())
     known = {str(Path(p["source_path"])) for p in c.db.query("SELECT source_path FROM projects WHERE source_path IS NOT NULL")}
+    known |= {str(Path(p["audio_path"])) for p in c.db.query("SELECT audio_path FROM projects WHERE audio_path IS NOT NULL")}
     orphans = [f for d in (c.paths.downloads, c.paths.uploads) for f in d.iterdir() if f.is_file() and str(f) not in known and ".part" not in f.name]
     orphan_projects = [d for d in (work / "projects").iterdir() if d.is_dir() and not c.db.one("SELECT 1 FROM projects WHERE id = ?", (d.name,))] if (work / "projects").exists() else []
     return {
@@ -173,6 +257,9 @@ def _storage_items(c: AppContext) -> dict:
         "downloads_mb": round(dir_size(c.paths.downloads) / MB, 1),
         "uploads_mb": round(dir_size(c.paths.uploads) / MB, 1),
         "cache_mb": round(dir_size(c.paths.cache) / MB, 2),
+        "library_mb": round(dir_size(c.paths.library) / MB, 1),
+        "exports_mb": round(dir_size(work / "exports") / MB, 1) if (work / "exports").exists() else 0,
+        "campaigns_mb": round(dir_size(c.paths.campaigns) / MB, 1),
         "temp_mb": round(temp / MB, 1),
         "partial_mb": round(partial / MB, 1),
         "orphans": [{"name": f.name, "mb": round(f.stat().st_size / MB, 1)} for f in orphans],
@@ -214,8 +301,12 @@ def cleanup(body: dict, c: AppContext = Depends(ctx), w: Worker = Depends(worker
                 shutil.rmtree(d, ignore_errors=True)
     if "cache" in targets:
         for f in c.paths.cache.glob("*"):
-            freed += f.stat().st_size
-            f.unlink(missing_ok=True)
+            if f.is_dir():  # e.g. generated sound effects (recreated on demand)
+                freed += dir_size(f)
+                shutil.rmtree(f, ignore_errors=True)
+            else:
+                freed += f.stat().st_size
+                f.unlink(missing_ok=True)
     if "orphans" in targets:
         # Files the app downloaded/uploaded that no project references anymore.
         for f in items["_orphan_paths"]:

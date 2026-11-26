@@ -65,7 +65,8 @@ class FaceTrack:
         return n / max(1, len(self.faces))
 
 
-def detect_faces(src: Path, start: float, end: float, *, cancel: CancelToken = NEVER) -> FaceTrack:
+def detect_faces(src: Path, start: float, end: float, *, cancel: CancelToken = NEVER, on_frame=None) -> FaceTrack:
+    """``on_frame(t, small_bgr)`` lets other detectors (burned-in text) share this decode pass."""
     cap = cv2.VideoCapture(str(src))
     if not cap.isOpened():
         raise RuntimeError("OpenCV could not open the video")
@@ -115,6 +116,8 @@ def detect_faces(src: Path, start: float, end: float, *, cancel: CancelToken = N
             prev_hist = hist
             track.times.append(max(0.0, t - start))
             track.faces.append(faces)
+            if on_frame is not None:
+                on_frame(max(0.0, t - start), small)
         return track
     finally:
         cap.release()
@@ -278,3 +281,155 @@ def write_sendcmd(plan: CropPlan, path: Path, target: str = "crop") -> None:
         lines.append(f"{t:.3f} {target} x {int(x)}, {target} y {int(y)};")
         px, py = x, y
     path.write_text("\n".join(lines) + "\n")
+
+
+# ----------------------------------------------------------------------------- stream (facecam) helpers
+BIG_FACE_H = 0.12  # a face at least this tall (fraction of frame height) is worth tracking
+
+
+def median_face_height(track: FaceTrack | None) -> float:
+    """Median height of the largest face in samples that have faces (0 if none)."""
+    if track is None:
+        return 0.0
+    hs = [max(fs, key=lambda f: f.area).h for fs in track.faces if fs]
+    return float(np.median(hs)) if hs else 0.0
+
+
+def facecam_rect(track: FaceTrack | None, *, min_presence: float = 0.35) -> list[float] | None:
+    """Find a streamer's webcam overlay: a small face that stays in the same off-centre place.
+
+    Returns the webcam box [x0, y0, x1, y1] (fractions of the frame) or None. The box is the face
+    expanded to a typical webcam framing (head and shoulders), clamped to the frame.
+    """
+    if track is None or not track.faces:
+        return None
+    pts = []
+    for fs in track.faces:
+        small = [f for f in fs if f.h < 0.3]
+        if small:
+            pts.append(max(small, key=lambda f: f.area))
+    if len(pts) < max(3, min_presence * len(track.faces)):
+        return None
+    cx = np.array([f.cx for f in pts])
+    cy = np.array([f.cy for f in pts])
+    # keep the dominant position (ignore faces inside the gameplay that move around)
+    mx, my = float(np.median(cx)), float(np.median(cy))
+    near = (np.abs(cx - mx) < 0.06) & (np.abs(cy - my) < 0.06)
+    if near.sum() < max(3, min_presence * len(track.faces)):
+        return None
+    off_centre = mx < 0.36 or mx > 0.64 or my < 0.3 or my > 0.7
+    if not off_centre:
+        return None
+    fw = float(np.median([f.w for f, k in zip(pts, near) if k]))
+    fh = float(np.median([f.h for f, k in zip(pts, near) if k]))
+    w, h = min(0.6, fw * 3.4), min(0.7, fh * 2.9)
+    x0, y0 = mx - w / 2, my - h * 0.42
+    x0 = min(max(0.0, x0), 1.0 - w)
+    y0 = min(max(0.0, y0), 1.0 - h)
+    return [round(x0, 4), round(y0, 4), round(x0 + w, 4), round(y0 + h, 4)]
+
+
+def cover_crop(rect_px: tuple[float, float, float, float], target_aspect: float, src_w: int, src_h: int) -> tuple[int, int, int, int]:
+    """Largest (w, h, x, y) crop of ``target_aspect`` centred inside ``rect_px``, kept in the frame, even sizes."""
+    x0, y0, x1, y1 = rect_px
+    rw, rh = max(2.0, x1 - x0), max(2.0, y1 - y0)
+    if rw / rh > target_aspect:
+        cw, ch = rh * target_aspect, rh
+    else:
+        cw, ch = rw, rw / target_aspect
+    cw, ch = int(cw) - int(cw) % 2, int(ch) - int(ch) % 2
+    cw, ch = max(2, min(cw, src_w - src_w % 2)), max(2, min(ch, src_h - src_h % 2))
+    x = int(round((x0 + x1) / 2 - cw / 2))
+    y = int(round((y0 + y1) / 2 - ch / 2))
+    return cw, ch, max(0, min(src_w - cw, x)), max(0, min(src_h - ch, y))
+
+
+# ----------------------------------------------------------------------------- action-following crop (Phase 2)
+class MotionCollector:
+    """Where is the action? Fed small frames (from the face pass or its own scan), it records, per
+    sample, the horizontal position of a crop window that contains the most motion."""
+
+    def __init__(self, crop_frac: float = 0.316) -> None:
+        self.crop_frac = crop_frac
+        self.times: list[float] = []
+        self.xs: list[float] = []  # crop centre, 0..1
+        self.conc: list[float] = []  # how concentrated the motion is (1 = uniform)
+        self._prev: np.ndarray | None = None
+
+    def add(self, t: float, small_bgr: np.ndarray) -> None:
+        g = cv2.cvtColor(small_bgr, cv2.COLOR_BGR2GRAY)
+        g = cv2.resize(g, (128, max(2, int(128 * g.shape[0] / g.shape[1]))), interpolation=cv2.INTER_AREA).astype(np.int16)
+        if self._prev is not None and self._prev.shape == g.shape:
+            d = np.abs(g - self._prev)
+            h = d.shape[0]
+            col = d[int(0.12 * h) : int(0.85 * h)].sum(axis=0).astype(np.float32)
+            cw = max(3, int(round(self.crop_frac * d.shape[1])))
+            win = np.convolve(col, np.ones(cw, np.float32), mode="valid")
+            if win.size and win.mean() > 0 and d.mean() < 40:  # very high diff = a cut, skip
+                j = int(np.argmax(win))
+                self.times.append(t)
+                self.xs.append((j + cw / 2) / d.shape[1])
+                self.conc.append(float(win[j] / win.mean()))
+        self._prev = g
+
+
+def scan_frames(src: Path, start: float, end: float, callbacks: list, *, fps: float = 4.0, cancel: CancelToken = NEVER) -> None:
+    """Feed downscaled frames of [start, end] to ``callbacks`` (each called as cb(t, small_bgr))."""
+    cap = cv2.VideoCapture(str(src))
+    if not cap.isOpened():
+        return
+    try:
+        sfps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        step = max(1, round(sfps / fps))
+        cap.set(cv2.CAP_PROP_POS_MSEC, start * 1000.0)
+        idx = 0
+        while True:
+            if idx % 32 == 0:
+                cancel.check()
+            if not cap.grab():
+                break
+            t = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+            if t > end:
+                break
+            take = idx % step == 0
+            idx += 1
+            if not take:
+                continue
+            ok, frame = cap.retrieve()
+            if not ok or frame is None:
+                continue
+            h0, w0 = frame.shape[:2]
+            small = cv2.resize(frame, (DET_WIDTH, max(2, int(h0 * DET_WIDTH / w0))), interpolation=cv2.INTER_AREA)
+            for cb in callbacks:
+                cb(max(0.0, t - start), small)
+    finally:
+        cap.release()
+
+
+def plan_motion_crop(mc: MotionCollector | None, *, src_w: int, src_h: int, aspect: float, duration: float, out_fps: float, cuts: list[float] | None = None, crop_wh: tuple[int, int] | None = None) -> CropPlan:
+    """A crop that drifts towards the action: only follows clearly concentrated motion, with a wide
+    dead-zone and slow smoothing so it never jitters. Falls back to the centre."""
+    cw, ch = crop_wh or crop_size(src_w, src_h, aspect)
+    n_out = max(1, int(np.ceil(duration * out_fps)))
+    cx = (src_w - cw) / 2
+    cy = (src_h - ch) / 2
+    if mc is None or len(mc.times) < 4:
+        return CropPlan(cw, ch, np.full(n_out, int(cx)), np.full(n_out, int(cy)), out_fps)
+    times = np.asarray(mc.times)
+    xs = np.asarray(mc.xs) * src_w
+    conc = np.asarray(mc.conc)
+    target = np.empty_like(xs)
+    last = src_w / 2
+    for i in range(xs.size):
+        if conc[i] >= 1.35:  # motion is clearly in one place (not a camera pan / whole-screen change)
+            last = xs[i]
+        target[i] = last
+    # median filter against one-off spikes, then the same smoother as face tracking
+    k = 5
+    padded = np.pad(target, (k // 2, k // 2), mode="edge")
+    target = np.array([np.median(padded[i : i + k]) for i in range(target.size)])
+    sm = _smooth_axis(target, deadzone=0.10 * src_w, alpha=0.12)
+    x_s = np.clip(sm - cw / 2, 0, src_w - cw)
+    t_out = np.arange(n_out) / out_fps
+    x_out = np.interp(t_out, times, x_s)
+    return CropPlan(cw, ch, np.round(x_out).astype(int), np.full(n_out, int(cy)), out_fps)

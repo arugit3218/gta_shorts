@@ -13,7 +13,9 @@ dependencies = [
     "opencv-python-headless==5.1.0.95",
     "psutil==7.2.2",
     "yt-dlp==2026.10.26",
+    "yt-dlp-ejs==0.8.0",
     "parakeet-mlx==0.7.0",
+    "pillow>=11",
 ]
 
 [dependency-groups]

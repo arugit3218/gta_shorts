@@ -35,15 +35,25 @@ class CaptionStyle(BaseModel):
     animation: Animation = "pop"
     background: bool = False  # opaque box behind text
     background_color: str = "#000000"
+    emphasis_color: str = "#2BE04F"  # keyword emphasis (Phase 4A)
+    emphasis_scale: float = Field(1.12, ge=1.0, le=1.4)
+    glow: bool = False  # soft glow in the outline colour (neon look)
 
 
 PRESETS: dict[str, CaptionStyle] = {
     "classic": CaptionStyle(name="Classic white", font="Arial", size=0.042, bold=True, uppercase=False, max_words=7, animation="none", outline=0.004, shadow=0.002, position=0.80),
-    "bold": CaptionStyle(name="Bold animated", font="Arial Black", size=0.058, uppercase=True, max_words=3, animation="pop", highlight_color="#FFE600"),
+    "bold": CaptionStyle(name="Bold animated", font="Montserrat ExtraBold", bold=False, size=0.056, uppercase=True, max_words=3, animation="pop", highlight_color="#FFE600", outline=0.007),
+    "punchy": CaptionStyle(name="Punchy (Anton)", font="Anton", bold=False, size=0.066, uppercase=True, max_words=2, max_lines=1, animation="pop", highlight_color="#FFE600", outline=0.006),
     "highlight": CaptionStyle(name="Highlighted word", font="Arial Black", size=0.05, uppercase=False, max_words=4, animation="highlight", highlight_color="#22E06B", outline=0.007),
-    "karaoke": CaptionStyle(name="Karaoke fill", font="Impact", size=0.06, uppercase=True, max_words=4, animation="karaoke", highlight_color="#00D1FF", outline=0.006),
+    "karaoke": CaptionStyle(name="Karaoke fill", font="Anton", bold=False, size=0.06, uppercase=True, max_words=4, animation="karaoke", highlight_color="#00D1FF", outline=0.006),
     "cinematic": CaptionStyle(name="Cinematic", font="Georgia", size=0.038, bold=False, uppercase=False, max_words=8, animation="fade", outline=0.0, shadow=0.004, position=0.86, color="#F5F1E8"),
     "minimal": CaptionStyle(name="Minimal", font="Helvetica Neue", size=0.036, bold=False, uppercase=False, max_words=6, animation="none", outline=0.0, shadow=0.0, background=True, background_color="#000000", position=0.82),
+    # Phase 4A themes
+    "hormozi": CaptionStyle(name="Hormozi", font="Montserrat ExtraBold", bold=False, size=0.058, uppercase=True, max_words=3, animation="highlight", highlight_color="#FFD300", emphasis_color="#2BE04F", outline=0.008, shadow=0.004, position=0.68),
+    "beast": CaptionStyle(name="Beast (comic)", font="Bangers", bold=False, size=0.076, uppercase=True, max_words=2, max_lines=1, animation="pop", highlight_color="#FFE600", emphasis_color="#FF3B3B", outline=0.01, shadow=0.005, position=0.66),
+    "hype": CaptionStyle(name="Hype (one word)", font="Anton", bold=False, size=0.085, uppercase=True, max_words=1, max_lines=1, animation="pop", color="#FFFFFF", highlight_color="#FFFFFF", emphasis_color="#FFE600", outline=0.008, position=0.62),
+    "neon": CaptionStyle(name="Neon glow", font="Montserrat ExtraBold", bold=False, size=0.054, uppercase=True, max_words=3, animation="highlight", color="#FFFFFF", highlight_color="#00E5FF", outline_color="#00B8FF", emphasis_color="#FF4FD8", outline=0.005, glow=True),
+    "boxed": CaptionStyle(name="Boxed", font="Montserrat ExtraBold", bold=False, size=0.048, uppercase=True, max_words=3, animation="highlight", background=True, background_color="#000000", highlight_color="#FFE600", emphasis_color="#2BE04F"),
 }
 
 
@@ -136,7 +146,8 @@ def _wrap(tokens: list[str], max_lines: int, max_chars_line: int) -> list[list[i
     return [list(range(a, b)) for a, b in zip(cuts, cuts[1:])]
 
 
-def build_ass(words: list[CapWord], style: CaptionStyle, *, width: int, height: int) -> str:
+def build_ass(words: list[CapWord], style: CaptionStyle, *, width: int, height: int, emphasis: set[int] | None = None) -> str:
+    """``emphasis``: indices into ``words`` drawn in the emphasis colour, slightly larger."""
     font_px = round(style.size * height)
     outline = round(style.outline * height, 1)
     shadow = round(style.shadow * height, 1)
@@ -159,12 +170,19 @@ Style: Cap,{style.font},{font_px},{ass_color(style.color)},{ass_color(style.high
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     pos = f"\\pos({width // 2},{round(style.position * height)})"
+    if style.glow:
+        pos += "\\blur6"
     hi = ass_color(style.highlight_color)
+    em = ass_color(style.emphasis_color)
+    em_scale = round(style.emphasis_scale * 100)
+    emphasis = emphasis or set()
+    index = {id(w): i for i, w in enumerate(words)}
     base = ass_color(style.color)
     max_chars_line = max(8, int((width * 0.86) / (font_px * 0.62)))
     events: list[str] = []
     for page in paginate(words, style, width=width, height=height):
         toks = [_escape(w.w.upper() if style.uppercase else w.w) for w in page.words]
+        emph = {k for k, w in enumerate(page.words) if index.get(id(w)) in emphasis}
         lines = _wrap(toks, style.max_lines, max_chars_line)
 
         def render(active: int | None, karaoke_upto: int | None = None) -> str:
@@ -173,7 +191,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 seg = []
                 for i in line:
                     t = toks[i]
-                    if active is not None and i == active:
+                    if i in emph:
+                        # constant for the whole page, so it doesn't make the line jitter
+                        seg.append(f"{{\\c{em}\\fscx{em_scale}\\fscy{em_scale}}}{t}{{\\c{base}\\fscx100\\fscy100}}")
+                    elif active is not None and i == active:
                         seg.append(f"{{\\c{hi}}}{t}{{\\c{base}}}")
                     elif karaoke_upto is not None and i <= karaoke_upto:
                         seg.append(f"{{\\c{hi}}}{t}{{\\c{base}}}")

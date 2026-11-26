@@ -16,7 +16,7 @@ from ..context import AppContext
 from ..errors import ClipStudioError
 from ..jobs.worker import Worker
 from ..logging_setup import setup_logging
-from . import clips, projects, system
+from . import campaigns, clips, library, montages, projects, recipes, system
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ def create_app(context: AppContext | None = None, *, start_worker: bool = True) 
         w.stop()
         c.db.close()
 
-    app = FastAPI(title="ClipStudio", version="0.1.0", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
+    app = FastAPI(title="ClipStudio", version="0.2.0", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
     app.state.ctx = c
     app.state.worker = w
 
@@ -62,6 +62,10 @@ def create_app(context: AppContext | None = None, *, start_worker: bool = True) 
     app.include_router(projects.router)
     app.include_router(clips.router)
     app.include_router(system.router)
+    app.include_router(campaigns.router)
+    app.include_router(library.router)
+    app.include_router(montages.router)
+    app.include_router(recipes.router)
 
     dist: Path = c.env.frontend_dist
     if dist.exists():
@@ -74,6 +78,7 @@ def create_app(context: AppContext | None = None, *, start_worker: bool = True) 
             candidate = (dist / full_path).resolve()
             if full_path and candidate.is_file() and candidate.is_relative_to(dist.resolve()):
                 return FileResponse(candidate)
-            return FileResponse(dist / "index.html")
+            # never cache the page itself, so a new build shows up on the next load (assets are hashed)
+            return FileResponse(dist / "index.html", headers={"Cache-Control": "no-cache"})
 
     return app

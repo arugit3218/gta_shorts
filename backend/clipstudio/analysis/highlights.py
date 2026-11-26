@@ -44,8 +44,40 @@ def _bounds(sentences: list[Sentence], words: list[Word], i0: int, i1: int, tota
 
 
 def target_count(duration: float, max_clips: int) -> int:
-    """~1 clip per 4 minutes of source, at least 3, capped by settings."""
-    return max(1, min(max_clips, max(3, round(duration / 240))))
+    """How many clips to aim for: the number the user asked for (clips per video), limited only by how many
+    can fit in the source. Weak moments (below the minimum score) are still skipped, never padded."""
+    return max(1, min(max_clips, int(duration // 10) or 1))
+
+
+HEAT_MAX_BONUS = 10.0
+CHAPTER_PENALTY = 6.0
+
+
+class HeatSignal:
+    """YouTube "Most replayed" data: how often each part of the video is re-watched (0..1).
+
+    A window whose average replay level is well above the video's typical level gets up to
+    +10 points; clearly below-typical windows lose a little. It's real viewer behaviour, so it's
+    a strong tie-breaker between transcript-equal moments (and helps low-speech videos)."""
+
+    def __init__(self, heat: list[dict]):
+        import numpy as np
+
+        self.s = np.array([h["start"] for h in heat], dtype=float)
+        self.e = np.array([h["end"] for h in heat], dtype=float)
+        self.v = np.array([h["value"] for h in heat], dtype=float)
+        self.median = float(np.median(self.v))
+        self.p90 = float(np.percentile(self.v, 90))
+
+    def bonus(self, start: float, end: float) -> float:
+        import numpy as np
+
+        inter = np.clip(np.minimum(self.e, end) - np.maximum(self.s, start), 0, None)
+        if inter.sum() <= 0:
+            return 0.0
+        mean = float((self.v * inter).sum() / inter.sum())
+        rel = (mean - self.median) / max(1e-6, self.p90 - self.median)
+        return round(HEAT_MAX_BONUS * max(-0.4, min(1.0, rel)), 1)
 
 
 def find_highlights(
@@ -58,6 +90,8 @@ def find_highlights(
     max_dur: float,
     max_clips: int,
     min_score: float,
+    heat: list[dict] | None = None,
+    chapters: list[float] | None = None,
 ) -> tuple[list[Candidate], dict]:
     sentences = normalise_sentences(t)
     if not sentences:
@@ -65,6 +99,7 @@ def find_highlights(
     topics = topic_boundaries(sentences)
     scorer = Scorer(sentences, t.words, topics, audio, source_height=source_height, weights=weights, target=(min_dur, max_dur))
 
+    heat_sig = HeatSignal(heat) if heat and len(heat) >= 10 else None
     windows: list[Candidate] = []
     n = len(sentences)
     for i0 in range(n):
@@ -76,6 +111,7 @@ def find_highlights(
             if dur < min_dur:
                 continue
             sc = scorer.score(i0, i1, start, end)
+            _adjust(sc, start, end, heat_sig, chapters)
             windows.append(Candidate(start, end, i0, i1, sentences[i0].i0, sentences[i1 - 1].i1, sc))
 
     # Short videos with no window long enough: fall back to the best window under min duration.
@@ -111,12 +147,33 @@ def find_highlights(
         "target": want,
         "selected": len(chosen),
     }
+    if heat_sig is not None:
+        stats["heatmap"] = True
     if len(chosen) < want:
-        stats["reason"] = (
-            f"Only {len(chosen)} non-overlapping moments scored above the minimum ({min_score:.0f}); "
-            "not padding with weak clips."
-        )
+        stats["reason"] = few_reason(len(chosen), want, min_score)
     return chosen, stats
+
+
+def few_reason(got: int, want: int, min_score: float) -> str:
+    return (
+        f"{got} of the {want} clips you asked for: only {got} separate moments scored above the minimum quality "
+        f"({min_score:.0f}/100). Weak moments are skipped rather than padded. Lower “Minimum score” in Settings → Basics to get more."
+    )
+
+
+def _adjust(sc: ClipScore, start: float, end: float, heat_sig: HeatSignal | None, chapters: list[float] | None) -> None:
+    if heat_sig is not None:
+        b = heat_sig.bonus(start, end)
+        if b:
+            sc.total = round(max(0.0, min(100.0, sc.total + b)), 1)
+            sc.scores["replay"] = b
+            if b >= 3:
+                sc.reasons.append(f"Viewers replay this part often (YouTube “Most replayed”, +{b:g})")
+            elif b <= -2:
+                sc.weaknesses.append("Viewers rarely replay this part (YouTube “Most replayed”)")
+    if chapters and any(start + 2.0 < c < end - 2.0 for c in chapters):
+        sc.total = round(max(0.0, sc.total - CHAPTER_PENALTY), 1)
+        sc.weaknesses.append("Crosses a chapter boundary in the video (may mix two topics)")
 
 
 def _overlap(a: Candidate, b: Candidate) -> float:
@@ -128,3 +185,35 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     if not a or not b:
         return 0.0
     return len(a & b) / len(a | b)
+
+
+def score_range(t: Transcript, audio: AudioProfile, start: float, end: float, *, source_height: int, weights: dict[str, float]) -> Candidate:
+    """Score an arbitrary [start, end] range (manual clips, quick mode, AI picks) with the same
+    criteria as automatic highlights, so every clip gets an explanation."""
+    sentences = normalise_sentences(t)
+    inside = [k for k, s in enumerate(sentences) if s.end > start + 0.05 and s.start < end - 0.05]
+    if not inside:
+        empty = ClipScore(total=0.0, scores={}, reasons=[], weaknesses=["No speech in this range"], category="Highlight")
+        return Candidate(start, end, 0, 0, 0, 0, empty, text="", extras={"sentences": []})
+    i0, i1 = inside[0], inside[-1] + 1
+    topics = topic_boundaries(sentences)
+    lo, hi = sorted((max(1.0, end - start), max(1.0, end - start)))
+    scorer = Scorer(sentences, t.words, topics, audio, source_height=source_height, weights=weights, target=(lo * 0.8, hi * 1.2))
+    sc = scorer.score(i0, i1, start, end)
+    c = Candidate(start, end, i0, i1, sentences[i0].i0, sentences[i1 - 1].i1, sc)
+    c.text = " ".join(s.text for s in sentences[i0:i1])
+    c.extras["sentences"] = [{"start": s.start, "end": s.end, "text": s.text} for s in sentences[i0:i1]]
+    return c
+
+
+def snap_to_words(words: list[Word], start: float, end: float, total: float) -> tuple[float, float]:
+    """Move a rough [start, end] onto word boundaries (never cut a word in half)."""
+    if not words:
+        return max(0.0, start), min(total, end)
+    starts = [w for w in words if w.s >= start - 0.6]
+    s = starts[0].s - LEAD_IN if starts else start
+    ends = [w for w in words if w.e <= end + 0.6]
+    e = ends[-1].e + TAIL_OUT if ends else end
+    if e - s < 1.0:
+        s, e = start, end
+    return max(0.0, round(s, 3)), min(total, round(e, 3))

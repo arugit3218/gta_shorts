@@ -1,15 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useBlocker, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, media } from "../api";
+import { DEFAULT_POLISH, HOOK_TEMPLATES, HookStylePicker, PolishControls, RecipeSelect } from "../components/polish";
 import { Icon } from "../components/Icon";
-import { Alert, Bar, Spinner, toneOf, useToast } from "../components/ui";
+import { Alert, Bar, JobTime, Modal, Spinner, attempt, toneOf, useDialogs, useToast } from "../components/ui";
+import { PostedControl, postedState } from "../components/posting";
+import { ShortcutHelp } from "../components/shortcuts";
 import { fmtTime } from "../format";
-import { usePoll } from "../hooks";
-import type { AspectRatio, CaptionStyle, Clip, ClipWords, Layout, Word } from "../types";
+import { clipOrder, useHotkeys, usePoll } from "../hooks";
+import { CheckList, CopyButton, PLATFORM_LABEL, SafeZoneOverlay, Verdict, ZoneLegend, useSafeZones } from "../components/campaign";
+import type { AspectRatio, Campaign, CaptionStyle, Clip, ClipWords, Compliance, Layout, Platform, Polish, PostedMap, SfxCue, SfxType, Word } from "../types";
 import { ScoreBreakdown } from "./ProjectView";
 
-type Tab = "trim" | "captions" | "style" | "format" | "text" | "music";
-const FONTS = ["Arial Black", "Arial", "Impact", "Helvetica Neue", "Futura", "Avenir Next", "Georgia", "Verdana", "Trebuchet MS", "Courier New"];
+/** R3: 5 tabs instead of 9; each groups the old panels as sections. */
+type Tab = "trim" | "text" | "look" | "sound" | "post" | "montage";
+const FONTS = ["Montserrat ExtraBold", "Anton", "Bangers", "Arial Black", "Arial", "Impact", "Helvetica Neue", "Futura", "Avenir Next", "Georgia", "Verdana", "Trebuchet MS", "Courier New"];
 
 interface Draft {
   start: number;
@@ -25,6 +30,17 @@ interface Draft {
   caption_preset: string;
   caption_style: Partial<CaptionStyle>;
   music_volume: number;
+  music: string;
+  sfx: "auto" | "off" | "custom";
+  sfx_cues: SfxCue[];
+  blur_burned: "auto" | "off";
+  hook_overlay: { enabled: boolean; text: string; duration: number };
+  logo: boolean;
+  disclosure: boolean;
+  sound_id: string | null;
+  sound_volume: number;
+  original_volume: number;
+  polish: Polish;
   words: Word[] | null; // edited caption words (absolute seconds) or null = untouched
 }
 
@@ -42,20 +58,86 @@ function draftFrom(c: Clip): Draft {
     captions: c.edit.captions,
     caption_preset: c.edit.caption_preset,
     caption_style: c.edit.caption_style ?? {},
-    music_volume: c.edit.music_volume ?? 0.12,
+    music_volume: c.features?.music_volume ?? c.edit.music_volume ?? 0.25,
+    music: c.features?.music ?? "none",
+    sfx: c.features?.sfx ?? "off",
+    // only custom cues belong to the draft; automatic ones change with every render (and would look like an edit)
+    sfx_cues: c.features?.sfx === "custom" ? c.features.sfx_cues : [],
+    blur_burned: c.features?.blur_burned ?? "auto",
+    hook_overlay: { enabled: c.features?.hook_overlay.enabled ?? false, text: c.features?.hook_overlay.text ?? c.title ?? "", duration: c.features?.hook_overlay.duration ?? 3.5 },
+    logo: c.features?.logo ?? false,
+    disclosure: c.features?.disclosure ?? false,
+    sound_id: c.features?.sound_id ?? null,
+    sound_volume: c.features?.sound_volume ?? 1,
+    original_volume: c.features?.original_volume ?? 0.25,
+    polish: { ...DEFAULT_POLISH, ...c.features?.polish },
     words: null,
   };
 }
 
+/** Only what the user changed in this clip. Unchanged values aren't stored on the clip, so it keeps following
+ * the campaign and the defaults (a later logo upload, title-text or editing change still reaches it). */
+function campaignEdit(d: Draft, base: Draft, hasCampaign: boolean) {
+  const out: Record<string, unknown> = {};
+  const diff = (k: keyof Draft) => JSON.stringify(d[k]) !== JSON.stringify(base[k]);
+  if (hasCampaign) for (const k of ["logo", "disclosure", "sound_id", "sound_volume", "original_volume"] as const) if (diff(k)) out[k] = d[k];
+  for (const k of ["music", "sfx", "blur_burned"] as const) if (diff(k)) out[k] = d[k];
+  if (d.sfx === "custom" && (diff("sfx_cues") || diff("sfx"))) out.sfx_cues = d.sfx_cues;
+  const hook: Record<string, unknown> = {};
+  for (const k of ["enabled", "text", "duration"] as const) if (d.hook_overlay[k] !== base.hook_overlay[k]) hook[k] = d.hook_overlay[k];
+  if (Object.keys(hook).length) out.hook_overlay = hook;
+  const pol: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(d.polish)) if (JSON.stringify(v) !== JSON.stringify((base.polish as unknown as Record<string, unknown>)[k])) pol[k] = v;
+  if (Object.keys(pol).length) out.polish = pol;
+  return out;
+}
+
 export default function ClipEditor() {
   const { id = "" } = useParams();
+  // a fresh editor per clip, so Previous / Next never carry one clip's draft into another
+  return <ClipEditorInner key={id} id={id} />;
+}
+
+function EdSection({ title, hint, collapsed, children }: { title: string; hint?: string; collapsed?: boolean; children: React.ReactNode }) {
+  return (
+    <details className="ed-sec" open={!collapsed}>
+      <summary>
+        <span className="ed-title">{title}</span>
+        {hint && <span className="small muted">{hint}</span>}
+      </summary>
+      <div className="ed-body">{children}</div>
+    </details>
+  );
+}
+
+const EDITOR_KEYS: [string, string][] = [
+  ["mod+s", "Save"],
+  ["mod+enter", "Save & render"],
+  ["space", "Play / pause"],
+  ["j / k", "Next / previous clip"],
+  ["a", "Approve (again to undo)"],
+  ["r", "Reject (again to undo)"],
+  ["?", "Show shortcuts"],
+];
+
+function ClipEditorInner({ id }: { id: string }) {
   const toast = useToast();
+  const { confirm: confirmDlg } = useDialogs();
+  const nav = useNavigate();
+  const [help, setHelp] = useState(false);
   const clipQ = usePoll(() => api.clip(id), [id]);
   const wordsQ = usePoll(() => api.clipWords(id), [id]);
   const presets = usePoll(api.captionPresets, []).data;
   const clip = clipQ.data;
+  const projectQ = usePoll(() => (clip ? api.project(clip.project_id) : Promise.resolve(null)), [clip?.project_id]);
+  const campaignId = projectQ.data?.campaign_id;
+  const campaignQ = usePoll(() => (campaignId ? api.campaign(campaignId) : Promise.resolve(null)), [campaignId]);
+  const campaign = campaignQ.data;
+  const zones = useSafeZones();
+  const [showZones, setShowZones] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [tab, setTab] = useState<Tab>("trim");
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState<Tab | null>((["trim", "text", "look", "sound", "post", "montage"] as Tab[]).find((t) => t === params.get("tab")) ?? null);
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
@@ -66,6 +148,8 @@ export default function ClipEditor() {
   useEffect(() => {
     if (clip && !draft) setDraft(draftFrom(clip));
   }, [clip, draft]);
+  const isMontage = clip?.analysis.mode === "montage";
+  const activeTab: Tab = tab ?? (isMontage ? "montage" : "trim");
 
   // Poll the clip while it renders, then refresh the player.
   useEffect(() => {
@@ -86,6 +170,72 @@ export default function ClipEditor() {
     return JSON.stringify({ ...o, words: null }) !== JSON.stringify({ ...draft, words: null }) || draft.words !== null;
   }, [clip, draft]);
 
+  // ---- unsaved changes: block in-app navigation and warn on tab close
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && currentLocation.pathname !== nextLocation.pathname);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+
+  // ---- previous / next clip, in the order the project page showed them
+  const siblings = usePoll(() => (clip ? api.clips(clip.project_id) : Promise.resolve([] as Clip[])), [clip?.project_id]).data;
+  const order = useMemo(() => {
+    if (!clip || !siblings) return [] as string[];
+    const ids = new Set(siblings.map((c) => c.id));
+    const saved = (clipOrder.load(clip.project_id) ?? []).filter((x) => ids.has(x));
+    const rest = [...siblings].sort((a, b) => a.rank - b.rank).map((c) => c.id).filter((x) => !saved.includes(x));
+    return [...saved, ...rest];
+  }, [clip, siblings]);
+  const pos = order.indexOf(id);
+  const prevId = pos > 0 ? order[pos - 1] : null;
+  const nextId = pos >= 0 && pos < order.length - 1 ? order[pos + 1] : null;
+
+  const setStatus = async (status: "approved" | "rejected" | "candidate") => {
+    if (!clip) return;
+    const before = clip.status;
+    const next = clip.status === status ? "candidate" : status;
+    try {
+      const c = await api.patchClip(id, { status: next });
+      clipQ.setData(c);
+      toast(next === "approved" ? "Approved" : next === "rejected" ? "Rejected" : "Marked as not reviewed", "info", {
+        action: { label: "Undo", onClick: async () => clipQ.setData(await api.patchClip(id, { status: before })) },
+      });
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  };
+
+  const tabQs = tab ? `?tab=${tab}` : "";
+  const latest = useRef<{ save: (r: boolean) => Promise<void> | void; dirty: boolean; saving: boolean; rendering: boolean } | null>(null);
+  const commitTyping = () => {
+    const el = document.activeElement as HTMLElement | null;
+    if (el && ["INPUT", "TEXTAREA"].includes(el.tagName)) el.blur();
+  };
+  useHotkeys({
+    "mod+s": () => {
+      commitTyping();
+      setTimeout(() => latest.current && latest.current.dirty && !latest.current.saving && latest.current.save(false), 0);
+    },
+    "mod+enter": () => {
+      commitTyping();
+      setTimeout(() => latest.current && !latest.current.saving && !latest.current.rendering && latest.current.save(true), 0);
+    },
+    j: () => nextId && nav(`/clips/${nextId}${tabQs}`),
+    k: () => prevId && nav(`/clips/${prevId}${tabQs}`),
+    a: () => setStatus("approved"),
+    r: () => setStatus("rejected"),
+    space: () => {
+      const v = document.querySelector<HTMLVideoElement>(".editor-preview video");
+      if (v) v.paused ? v.play() : v.pause();
+    },
+    "?": () => setHelp(true),
+  });
+
   const buildPatch = useCallback(() => {
     if (!draft || !clip) return {};
     const styleOverrides = Object.keys(draft.caption_style).length ? draft.caption_style : undefined;
@@ -104,10 +254,11 @@ export default function ClipEditor() {
         caption_preset: draft.caption_preset,
         ...(styleOverrides ? { caption_style: styleOverrides } : {}),
         music_volume: draft.music_volume,
+        ...campaignEdit(draft, draftFrom(clip), !!campaign),
       },
       ...(draft.words ? { caption_words: draft.words } : {}),
     };
-  }, [draft, clip]);
+  }, [draft, clip, campaign]);
 
   const save = async (andRender: boolean) => {
     if (!draft) return;
@@ -128,6 +279,7 @@ export default function ClipEditor() {
       setSaving(false);
     }
   };
+  latest.current = { save, dirty, saving, rendering: !!rendering };
 
   const makePreview = async (t?: number) => {
     if (!draft || !clip) return;
@@ -137,12 +289,13 @@ export default function ClipEditor() {
         t: t ?? Math.min(2, (draft.end - draft.start) / 3),
         edit: {
           aspect_ratio: draft.aspect_ratio,
-          // tracking needs a full face pass; the still preview uses a static crop
-          layout: draft.layout === "blur" ? "blur" : "center",
+          // face tracking needs a full pass; the still preview uses a static crop (stream/auto use the saved or last-detected webcam box)
+          layout: draft.layout === "split" ? "center" : draft.layout,
           output_height: draft.output_height,
           captions: draft.captions,
           caption_preset: draft.caption_preset,
           ...(Object.keys(draft.caption_style).length ? { caption_style: draft.caption_style } : {}),
+          ...campaignEdit(draft, draftFrom(clip), !!campaign),
         },
         caption_words: draft.words ?? undefined,
       });
@@ -177,23 +330,50 @@ export default function ClipEditor() {
             </span>
           </div>
         </div>
-        <div className="row">
-          {dirty && <span className="small muted">Unsaved changes</span>}
+        <div className="row wrap" style={{ justifyContent: "flex-end" }}>
+          <span className="row" style={{ gap: 4 }}>
+            <button className="btn sm icon" disabled={!prevId} onClick={() => prevId && nav(`/clips/${prevId}${tabQs}`)} title="Previous clip (K)" aria-label="Previous clip">
+              <Icon name="chevronLeft" />
+            </button>
+            <span className="small muted nowrap">{pos >= 0 ? `${pos + 1} / ${order.length}` : ""}</span>
+            <button className="btn sm icon" disabled={!nextId} onClick={() => nextId && nav(`/clips/${nextId}${tabQs}`)} title="Next clip (J)" aria-label="Next clip">
+              <Icon name="chevronRight" />
+            </button>
+          </span>
+          <span className="row" style={{ gap: 4 }}>
+            <button className={`btn sm ${clip.status === "approved" ? "on approve" : ""}`} onClick={() => setStatus("approved")} title="Approve (A)" aria-pressed={clip.status === "approved"}>
+              <Icon name="check" /> {clip.status === "approved" ? "Approved" : "Approve"}
+            </button>
+            <button className={`btn sm ${clip.status === "rejected" ? "on reject" : ""}`} onClick={() => setStatus("rejected")} title="Reject (R)" aria-pressed={clip.status === "rejected"}>
+              <Icon name="x" /> {clip.status === "rejected" ? "Rejected" : "Reject"}
+            </button>
+            {clip.status === "approved" && clip.has_video && activeTab !== "post" && (
+              <button className="btn sm primary" onClick={() => setTab("post")} title="Check against the campaign, copy the caption, download and post">
+                <Icon name="check" /> Post
+              </button>
+            )}
+          </span>
+          <button className="btn sm ghost icon" onClick={() => setHelp(true)} title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">
+            ?
+          </button>
+          <span className="divider-v" />
+          {dirty && <span className="badge warn">Unsaved changes</span>}
           <button className="btn" disabled={!dirty || saving} onClick={() => setDraft(draftFrom(clip))}>
             Discard
           </button>
-          <button className="btn" disabled={!dirty || saving} onClick={() => save(false)}>
+          <button className="btn" disabled={!dirty || saving} onClick={() => save(false)} title="Save (⌘S)">
             Save
           </button>
-          <button className="btn primary" disabled={saving || !!rendering} onClick={() => save(true)}>
-            {saving || rendering ? <Spinner /> : <Icon name="refresh" />} {dirty ? "Save & render" : "Re-render"}
+          <button className="btn primary" disabled={saving || !!rendering} onClick={() => save(true)} title="Save & render (⌘↵)">
+            {saving || rendering ? <Spinner /> : <Icon name="refresh" />} {dirty ? "Save & render" : clip.has_video ? "Re-render" : "Render"}
           </button>
         </div>
       </div>
 
       <div className="editor">
         <div className="editor-preview stack">
-          <div className={`card clip-media ${arClass}`} style={{ overflow: "hidden", maxHeight: 640 }}>
+          <div className={`card clip-media preview-wrap ${arClass}`} style={{ overflow: "hidden", maxHeight: 640 }}>
+            {showZones && draft.aspect_ratio === "9:16" && <SafeZoneOverlay zones={zones} platforms={(campaign?.brief.platforms.length ? campaign.brief.platforms : ["reels", "shorts"]) as Platform[]} />}
             {preview ? (
               <img src={preview} alt="Caption preview frame" />
             ) : clip.has_video ? (
@@ -209,17 +389,33 @@ export default function ClipEditor() {
                   <Spinner size={22} />
                   <span className="small">{clip.render_status === "queued" ? "Waiting for the current job…" : "Rendering…"}</span>
                   {renderJob && <Bar value={renderJob.progress} />}
+                  {renderJob && <JobTime job={renderJob} />}
                 </div>
               </div>
             )}
           </div>
-          <div className="row">
+          <div className="row wrap preview-tools">
             <button className="btn sm" onClick={() => makePreview()} disabled={previewBusy}>
-              {previewBusy ? <Spinner /> : <Icon name="type" />} Preview captions
+              {previewBusy ? <Spinner /> : <Icon name="type" />} Preview exact frame
             </button>
             {preview && (
               <button className="btn sm ghost" onClick={() => setPreview(null)}>
                 Show video
+              </button>
+            )}
+            {!isMontage && (
+              <>
+                <button className="btn sm" onClick={() => setTab("look")} title="Aspect ratio and how the video fills the frame">
+                  <Icon name="crop" /> Framing
+                </button>
+                <button className="btn sm" onClick={() => setTab("text")} title="Caption words and style">
+                  <Icon name="type" /> Captions
+                </button>
+              </>
+            )}
+            {draft.aspect_ratio === "9:16" && (
+              <button className={`btn sm ${showZones ? "on" : ""}`} onClick={() => setShowZones(!showZones)} title="Show where Reels/Shorts UI covers the video">
+                <Icon name="layers" /> Safe zones
               </button>
             )}
             <span className="spacer" />
@@ -229,29 +425,43 @@ export default function ClipEditor() {
               </a>
             )}
           </div>
+          {showZones && <ZoneLegend />}
           {clip.render_status === "stale" && <Alert kind="warn">The video doesn't include your latest edits yet. Re-render to update it.</Alert>}
           {clip.render_status === "failed" && <Alert kind="danger" title="Render failed">{clip.render_error}</Alert>}
           {clip.analysis.layout_used && (
             <p className="tiny muted">
-              Last render: {clip.analysis.layout_used} framing{clip.analysis.face_ratio ? ` · faces in ${Math.round(clip.analysis.face_ratio * 100)}% of frames` : ""}
+              Last render: {clip.analysis.output ? `${clip.analysis.output} · ` : ""}
+              {clip.analysis.layout_used} framing{clip.analysis.face_ratio ? ` · faces in ${Math.round(clip.analysis.face_ratio * 100)}% of frames` : ""}
+              {clip.analysis.burned_text ? " · burned-in captions blurred" : ""}
+              {clip.analysis.music_used ? ` · music: ${clip.analysis.music_used}` : ""}
+              {clip.analysis.sfx_used?.length ? ` · ${clip.analysis.sfx_used.length} sound effect(s)` : ""}
+              {clip.analysis.polish_used?.cuts ? ` · ${clip.analysis.polish_used.cuts} jump cut(s), ${clip.analysis.polish_used.removed}s of dead air removed` : ""}
+              {clip.analysis.polish_used?.zooms ? ` · ${clip.analysis.polish_used.zooms} zoom(s)` : ""}
+              {clip.analysis.polish_used?.cold_open ? " · cold open" : ""}
+              {clip.analysis.output_duration ? ` · ${clip.analysis.output_duration.toFixed(1)}s long` : ""}
             </p>
           )}
         </div>
 
         <div className="card">
           <div className="card-body">
-            <div className="tabs">
+            <div className="tabs" role="tablist" aria-label="Edit">
               {(
-                [
-                  ["trim", "Trim", "scissors"],
-                  ["captions", "Captions", "type"],
-                  ["style", "Caption style", "sparkles"],
-                  ["format", "Format", "crop"],
-                  ["text", "Title & hook", "edit"],
-                  ["music", "Music", "music"],
-                ] as const
+                (isMontage
+                  ? [
+                      ["montage", "Montage", "music"],
+                      ["text", "Text & logo", "type"],
+                      ["post", "Post", "clipboard"],
+                    ]
+                  : [
+                      ["trim", "Trim", "scissors"],
+                      ["text", "Captions", "type"],
+                      ["look", "Framing", "crop"],
+                      ["sound", "Sound", "music"],
+                      ["post", "Post", "clipboard"],
+                    ]) as [Tab, string, "music" | "clipboard" | "scissors" | "type" | "crop"][]
               ).map(([k, l, icon]) => (
-                <button key={k} className={tab === k ? "active" : ""} onClick={() => setTab(k)}>
+                <button key={k} role="tab" aria-selected={activeTab === k} className={activeTab === k ? "active" : ""} onClick={() => setTab(k)}>
                   <span className="row" style={{ gap: 6 }}>
                     <Icon name={icon} size={14} />
                     {l}
@@ -260,24 +470,99 @@ export default function ClipEditor() {
               ))}
             </div>
 
-            {tab === "trim" && wordsQ.data && <TrimPanel clip={clip} words={wordsQ.data} draft={draft} set={set} />}
-            {tab === "trim" && !wordsQ.data && <Spinner />}
-            {tab === "captions" && wordsQ.data && <CaptionsPanel words={wordsQ.data} draft={draft} set={set} onReset={async () => {
-              const c = await api.patchClip(id, { reset_captions: true });
-              clipQ.setData(c);
-              set("words", null);
-              wordsQ.reload();
-              toast("Captions reset to the transcript");
-            }} />}
-            {tab === "style" && presets && style && (
-              <StylePanel presets={presets} draft={draft} style={style} set={set} setStyle={setStyle} onPreview={() => makePreview()} previewBusy={previewBusy} />
+            {activeTab === "montage" && <MontagePanel clip={clip} onClip={(c) => (clipQ.setData(c), setDraft((d) => (d && dirty ? d : draftFrom(c))))} />}
+            {activeTab === "trim" && (wordsQ.data ? <TrimPanel clip={clip} words={wordsQ.data} draft={draft} set={set} /> : <Spinner />)}
+            {activeTab === "text" && (
+              <div className="stack lg">
+                {!isMontage && (
+                  <EdSection title="Captions" hint="The words on screen. Fix any mistakes here.">
+                    {wordsQ.data ? (
+                      <CaptionsPanel
+                        words={wordsQ.data}
+                        draft={draft}
+                        set={set}
+                        onReset={async () => {
+                          if (!(await confirmDlg({ title: "Reset the captions?", body: "Every word you fixed by hand in this clip goes back to the original transcript.", confirm: "Reset captions", danger: true }))) return;
+                          await attempt(toast, async () => {
+                            const c = await api.patchClip(id, { reset_captions: true });
+                            clipQ.setData(c);
+                            set("words", null);
+                            wordsQ.reload();
+                            toast("Captions reset to the transcript");
+                          });
+                        }}
+                      />
+                    ) : (
+                      <Spinner />
+                    )}
+                  </EdSection>
+                )}
+                {!isMontage && presets && style && (
+                  <EdSection title="Caption style" hint="Ready-made looks, or change font, colours, size, position and animation.">
+                    <StylePanel presets={presets} draft={draft} style={style} set={set} setStyle={setStyle} onPreview={() => makePreview()} previewBusy={previewBusy} />
+                  </EdSection>
+                )}
+                <EdSection title="Title, hook and hashtags" hint="The title text at the start, and the words used in the post caption.">
+                  <TextPanel clip={clip} draft={draft} set={set} />
+                </EdSection>
+                {isMontage && (
+                  <EdSection title="On-screen extras" hint="Logo, #ad and other overlays.">
+                    <OverlaysPanel clip={clip} draft={draft} set={set} campaign={campaign ?? null} />
+                  </EdSection>
+                )}
+              </div>
             )}
-            {tab === "format" && <FormatPanel draft={draft} set={set} />}
-            {tab === "text" && <TextPanel clip={clip} draft={draft} set={set} />}
-            {tab === "music" && <MusicPanel clip={clip} draft={draft} set={set} onClip={(c) => clipQ.setData(c)} />}
+            {activeTab === "look" && (
+              <div className="stack lg">
+                <EdSection title="Framing" hint="Shape of the video and how the source fills it.">
+                  <FormatPanel draft={draft} set={set} />
+                </EdSection>
+                <EdSection title="Editing" hint="Dead-air cuts, zooms, emphasis, progress bar.">
+                  <PolishPanel clip={clip} draft={draft} set={set} dirty={dirty} onClip={(c) => (clipQ.setData(c), setDraft(draftFrom(c)))} />
+                </EdSection>
+                <EdSection title="On-screen extras" hint="Title text style, logo, #ad, blurring the source's own captions.">
+                  <OverlaysPanel clip={clip} draft={draft} set={set} campaign={campaign ?? null} />
+                </EdSection>
+              </div>
+            )}
+            {activeTab === "sound" && <AudioPanel clip={clip} draft={draft} set={set} campaign={campaign ?? null} onClip={(c) => (clipQ.setData(c), setDraft((d) => (d ? { ...d, music: draftFrom(c).music, music_volume: draftFrom(c).music_volume } : draftFrom(c))))} />}
+            {activeTab === "post" && <CampaignPanel clip={clip} dirty={dirty} campaign={campaign ?? null} onClip={() => clipQ.reload()} />}
           </div>
         </div>
       </div>
+      {help && <ShortcutHelp items={EDITOR_KEYS} onClose={() => setHelp(false)} />}
+      {blocker.state === "blocked" && (
+        <Modal
+          title="Leave without saving?"
+          onClose={() => blocker.reset()}
+          actions={
+            <>
+              <button className="btn" onClick={() => blocker.reset()}>
+                Stay
+              </button>
+              <button className="btn danger" onClick={() => blocker.proceed()}>
+                Discard changes
+              </button>
+              <button
+                className="btn primary"
+                onClick={async () => {
+                  try {
+                    await api.patchClip(id, buildPatch());
+                    blocker.proceed();
+                  } catch (e) {
+                    toast((e as Error).message, "error");
+                    blocker.reset();
+                  }
+                }}
+              >
+                Save &amp; leave
+              </button>
+            </>
+          }
+        >
+          <p className="small">This clip has edits that aren't saved yet. Saving doesn't re-render; the clip is marked for re-render.</p>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -288,8 +573,10 @@ function TrimPanel({ clip, words, draft, set }: { clip: Clip; words: ClipWords; 
   const video = useRef<HTMLVideoElement>(null);
   const [playhead, setPlayhead] = useState<number | null>(null);
   const ctx = words.context_words;
-  const lo = Math.max(0, Math.min(clip.start, draft.start) - 15);
-  const hi = Math.min(words.source_duration || draft.end + 15, Math.max(clip.end, draft.end) + 15);
+  const [rlo, rhi] = words.source_range ?? [0, words.source_duration];
+  const offset = words.source_offset ?? 0;
+  const lo = Math.max(rlo ?? 0, Math.min(clip.start, draft.start) - 15);
+  const hi = Math.min(rhi || words.source_duration || draft.end + 15, Math.max(clip.end, draft.end) + 15);
   const span = hi - lo;
   const x = (t: number) => ((t - lo) / span) * 100;
 
@@ -327,7 +614,7 @@ function TrimPanel({ clip, words, draft, set }: { clip: Clip; words: ClipWords; 
   const playSel = () => {
     const v = video.current;
     if (!v) return;
-    v.currentTime = draft.start;
+    v.currentTime = Math.max(0, draft.start - offset);
     v.play();
   };
 
@@ -366,19 +653,19 @@ function TrimPanel({ clip, words, draft, set }: { clip: Clip; words: ClipWords; 
       </div>
       <div className="stack sm">
         <div className="row between">
-          <span className="label-text">Source preview</span>
+          <span className="label-text">Source preview{offset > 0 ? " (downloaded section)" : ""}</span>
           <button className="btn sm" onClick={playSel}>
             <Icon name="play" /> Play selection
           </button>
         </div>
         <video
           ref={video}
-          src={media.source(clip.project_id)}
+          src={media.clipSource(clip.id)}
           controls
           preload="metadata"
           style={{ width: "100%", borderRadius: 8, background: "#000", maxHeight: 260 }}
           onTimeUpdate={(e) => {
-            const t = e.currentTarget.currentTime;
+            const t = e.currentTarget.currentTime + offset;
             setPlayhead(t);
             if (t > draft.end && !e.currentTarget.paused && t < draft.end + 0.5) e.currentTarget.pause();
           }}
@@ -458,7 +745,7 @@ function CaptionsPanel({ words, draft, set, onReset }: { words: ClipWords; draft
       </label>
       <div className="stack sm">
         {lines.map((l, i) => (
-          <div className="caption-line" key={`${i}-${l[0].s}`}>
+          <div className="caption-line" key={`${i}-${l[0].s}-${l.map((w) => w.w).join(" ")}`}>
             <span className="mono muted">{fmtTime(l[0].s - draft.start, true)}</span>
             <input className="input" defaultValue={l.map((w) => w.w).join(" ")} onBlur={(e) => e.target.value !== l.map((w) => w.w).join(" ") && editLine(i, e.target.value)} />
           </div>
@@ -593,6 +880,9 @@ function StylePanel({
             <input type="color" value={style[k]} onChange={(e) => setStyle(k, e.target.value.toUpperCase())} /> {l}
           </label>
         ))}
+        <label className="row small" style={{ gap: 8 }} title="Colour of emphasised keywords (Framing tab → Editing → Keyword emphasis)">
+          <input type="color" value={style.emphasis_color ?? "#2BE04F"} onChange={(e) => setStyle("emphasis_color", e.target.value.toUpperCase())} /> Emphasis
+        </label>
         <label className="check small">
           <input type="checkbox" checked={style.uppercase} onChange={(e) => setStyle("uppercase", e.target.checked)} /> UPPERCASE
         </label>
@@ -604,6 +894,9 @@ function StylePanel({
         </label>
         <label className="check small">
           <input type="checkbox" checked={style.background} onChange={(e) => setStyle("background", e.target.checked)} /> Background box
+        </label>
+        <label className="check small">
+          <input type="checkbox" checked={!!style.glow} onChange={(e) => setStyle("glow", e.target.checked)} /> Glow
         </label>
       </div>
     </div>
@@ -635,9 +928,10 @@ function FormatPanel({ draft, set }: { draft: Draft; set: <K extends keyof Draft
         <div className="stack sm">
           {(
             [
-              ["auto", "Auto", "Tracks the main face when there is one; otherwise uses blurred fill."],
-              ["center", "Centre crop", "Static crop from the middle of the frame."],
-              ["blur", "Blurred fill", "Whole frame, with a blurred copy filling the empty space. Good for gameplay and screen recordings."],
+              ["auto", "Auto (recommended)", "Follows a big face; uses the stream layout when there's a webcam overlay; otherwise fills the frame. No blurred bars (change in Settings)."],
+              ["center", "Fill (crop)", "Fills the whole 9:16 frame from the centre. Immersive; the sides of a wide video are cut."],
+              ["stream", "Stream: webcam + gameplay", "Webcam on top, gameplay filling the rest. Set the webcam box once with Framing on the project page (or Auto-detect)."],
+              ["blur", "Blurred fill", "Whole frame visible, with blurred bars. Use when nothing may be cropped."],
               ["split", "Split screen", "Two people stacked top and bottom. Needs two faces visible; otherwise falls back to tracking."],
             ] as const
           ).map(([k, l, d]) => (
@@ -731,11 +1025,184 @@ function TextPanel({ clip, draft, set }: { clip: Clip; draft: Draft; set: <K ext
   );
 }
 
-// -------------------------------------------------------------------------------- music
-function MusicPanel({ clip, draft, set, onClip }: { clip: Clip; draft: Draft; set: <K extends keyof Draft>(k: K, v: Draft[K]) => void; onClip: (c: Clip) => void }) {
+// -------------------------------------------------------------------------------- overlays
+type SetDraft = <K extends keyof Draft>(k: K, v: Draft[K]) => void;
+
+function PolishPanel({ clip, draft, set, dirty, onClip }: { clip: Clip; draft: Draft; set: SetDraft; dirty: boolean; onClip: (c: Clip) => void }) {
+  const toast = useToast();
+  const { confirm, prompt } = useDialogs();
+  const [recipeId, setRecipeId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const used = clip.analysis.polish_used;
+  const apply = async () => {
+    if (!recipeId) return;
+    if (dirty && !(await confirm({ title: "Apply the recipe?", body: "It replaces your unsaved changes in this editor.", confirm: "Apply" }))) return;
+    setBusy(true);
+    try {
+      onClip(await api.applyRecipe(clip.id, recipeId));
+      toast("Recipe applied. Re-render to see it.");
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const saveAs = async () => {
+    if (dirty) {
+      toast("Save your changes first, then save them as a recipe.", "error");
+      return;
+    }
+    const name = await prompt({ title: "Save as recipe", body: "Saves this clip's caption style, framing, finishing and polish so you can apply it to other clips and videos.", label: "Recipe name", placeholder: "e.g. Podcast punchy", confirm: "Save recipe" });
+    if (!name?.trim()) return;
+    try {
+      await api.saveRecipeFromClip(clip.id, name.trim());
+      toast(`Saved recipe “${name.trim()}”`);
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  };
+  return (
+    <div className="stack lg">
+      <div className="stack sm">
+        <span className="section-title">Recipe</span>
+        <div className="row">
+          <div style={{ flex: 1, minWidth: 180 }}>
+            <RecipeSelect value={recipeId} onChange={(id) => setRecipeId(id)} placeholder="Pick a recipe…" />
+          </div>
+          <button className="btn" onClick={apply} disabled={!recipeId || busy}>
+            {busy ? <Spinner /> : <Icon name="check" />} Apply
+          </button>
+          <button className="btn ghost" onClick={saveAs}>
+            <Icon name="plus" /> Save as recipe
+          </button>
+        </div>
+        <span className="hint">A recipe sets caption style, framing, finishing and everything below in one go. To use one on every clip, use “Apply recipe” on the project page.</span>
+      </div>
+      <div className="divider" />
+      <PolishControls value={draft.polish} onChange={(p) => set("polish", { ...draft.polish, ...p })} compact />
+      {used && (
+        <p className="tiny muted">
+          Last render: {used.cuts} jump cut(s), {used.removed}s removed · {used.zooms} zoom(s) · {used.emphasis} emphasised word(s) · {used.emoji} emoji
+          {used.censored ? ` · ${used.censored} word(s) censored` : ""}
+          {used.cold_open ? ` · cold open from ${used.cold_open[0].toFixed(1)}s` : ""}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function OverlaysPanel({ clip, draft, set, campaign }: { clip: Clip; draft: Draft; set: SetDraft; campaign: Campaign | null }) {
+  const b = campaign?.brief;
+  return (
+    <div className="stack lg">
+      {(clip.features?.locked ?? []).includes("hook") ? (
+        <p className="small muted">Montages use the POV text (Montage tab) instead of a hook title card.</p>
+      ) : (
+      <div className="stack sm">
+        <label className="check">
+          <input type="checkbox" checked={draft.hook_overlay.enabled} onChange={(e) => set("hook_overlay", { ...draft.hook_overlay, enabled: e.target.checked })} />
+          <span>
+            <strong>Hook title</strong> at the start of the clip
+            <br />
+            <span className="small muted">A bold title near the top for the first seconds, inside the safe area.</span>
+          </span>
+        </label>
+        {draft.hook_overlay.enabled && (
+          <>
+            <input className="input" value={draft.hook_overlay.text} maxLength={160} onChange={(e) => set("hook_overlay", { ...draft.hook_overlay, text: e.target.value })} placeholder="3–9 punchy words" />
+            <select
+              className="select"
+              value=""
+              onChange={(e) => e.target.value && set("hook_overlay", { ...draft.hook_overlay, text: e.target.value.replace("{title}", (clip.title || "this happened").replace(/[.!?]+$/, "")) })}
+            >
+              <option value="">Hook templates…</option>
+              {HOOK_TEMPLATES.map((t) => (
+                <option key={t} value={t}>
+                  {t.replace("{title}", "<title>")}
+                </option>
+              ))}
+            </select>
+            <div className="field">
+              <label>Style</label>
+              <HookStylePicker value={draft.polish.hook_style} onChange={(v) => set("polish", { ...draft.polish, hook_style: v })} />
+            </div>
+            <div className="row wrap" style={{ gap: 6 }}>
+              {[clip.title, ...clip.hooks].filter((h, i, a) => h && a.indexOf(h) === i).slice(0, 4).map((h) => (
+                <button key={h} className="btn ghost sm" onClick={() => set("hook_overlay", { ...draft.hook_overlay, text: h })} title="Use this">
+                  “{h.length > 48 ? h.slice(0, 46) + "…" : h}”
+                </button>
+              ))}
+            </div>
+            <div className="field">
+              <label>Show for {draft.hook_overlay.duration}s</label>
+              <input type="range" min={1.5} max={8} step={0.5} value={draft.hook_overlay.duration} onChange={(e) => set("hook_overlay", { ...draft.hook_overlay, duration: +e.target.value })} />
+            </div>
+            {draft.hook_overlay.text.split(/\s+/).filter(Boolean).length > 10 && <span className="small" style={{ color: "var(--warn)" }}>Long hooks are cut to 10 words. Shorter reads better.</span>}
+          </>
+        )}
+      </div>
+      )}
+      <div className="divider" />
+      {clip.analysis.mode !== "montage" && (
+      <label className="check">
+        <input type="checkbox" checked={draft.blur_burned === "auto"} onChange={(e) => set("blur_burned", e.target.checked ? "auto" : "off")} />
+        <span>
+          <strong>Blur the source's burned-in captions</strong>
+          <br />
+          <span className="small muted">
+            Detects subtitles already in the video (lower part of the frame) and blurs that strip only while text is visible.
+            {clip.analysis.burned_text ? ` Found in the last render (${Math.round(clip.analysis.burned_text.presence * 100)}% of the clip).` : clip.analysis.layout_used ? " None found in the last render." : ""}
+          </span>
+        </span>
+      </label>
+      )}
+      <div className="divider" />
+      <span className="section-title">Campaign overlays</span>
+      {!campaign ? (
+        <p className="small muted">This video isn't in a campaign. Pick one on the project page to add its logo and disclosure.</p>
+      ) : (
+        <div className="stack sm">
+          {b && b.logo.mode !== "none" && (
+            <label className="check">
+              <input type="checkbox" checked={draft.logo} onChange={(e) => set("logo", e.target.checked)} disabled={!b.logo.has_file} />
+              <span>
+                <strong>{b.logo.mode === "template" ? "Logo template" : "Logo"}</strong> from “{campaign.name}”
+                <br />
+                <span className="small muted">
+                  {!b.logo.has_file ? "No logo uploaded to the campaign yet." : b.logo.mode === "template" ? "Full-frame overlay as supplied, looped; output is 1080x1920." : `Placed in the ${b.logo.zone.replace("_", " ")} zone. Adjust on the campaign page.`}
+                </span>
+              </span>
+            </label>
+          )}
+          {b && b.disclosure.text && b.disclosure.on_screen && (
+            <label className="check">
+              <input type="checkbox" checked={draft.disclosure} onChange={(e) => set("disclosure", e.target.checked)} />
+              <span>
+                Show <strong>“{b.disclosure.text}”</strong> on screen ({b.disclosure.corner.replace("_", " ")})
+              </span>
+            </label>
+          )}
+          {b && b.logo.mode === "none" && !(b.disclosure.text && b.disclosure.on_screen) && <p className="small muted">This campaign has no on-screen logo or disclosure.</p>}
+          <Link to={`/campaigns/${campaign.id}`} className="small">
+            Edit campaign →
+          </Link>
+        </div>
+      )}
+      <p className="tiny muted">Use “Preview exact frame” to see a still frame with every overlay, and “Safe zones” to check nothing sits under the app's buttons.</p>
+    </div>
+  );
+}
+
+// -------------------------------------------------------------------------------- audio
+const SFX_TYPES: SfxType[] = ["pop", "whoosh", "hit", "riser", "ding"];
+
+function AudioPanel({ clip, draft, set, campaign, onClip }: { clip: Clip; draft: Draft; set: SetDraft; campaign: Campaign | null; onClip: (c: Clip) => void }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const lib = usePoll(api.library, []).data;
+  const locked = clip.features?.locked ?? [];
+  const b = campaign?.brief;
   const upload = async (f: File) => {
     setBusy(true);
     try {
@@ -747,29 +1214,418 @@ function MusicPanel({ clip, draft, set, onClip }: { clip: Clip; draft: Draft; se
       setBusy(false);
     }
   };
-  const remove = async () => onClip(await api.patchClip(clip.id, { remove_music: true }));
+  const tracks = lib ? Object.entries(lib.music).flatMap(([m, l]) => l.map((t) => ({ mood: m, name: t.name }))) : [];
+  const libCount = tracks.length;
   return (
     <div className="stack lg">
-      <Alert kind="info">Only use music you own or have a licence for. It's mixed quietly under the speech and fades out at the end.</Alert>
-      {clip.edit.music ? (
-        <div className="row between card pad">
-          <span className="row">
-            <Icon name="music" /> {clip.edit.music}
-          </span>
-          <button className="btn sm danger" onClick={remove}>
-            <Icon name="trash" /> Remove
+      {b && b.sound_rule.mode === "burn" && (
+        <div className="stack sm">
+          <span className="section-title">Campaign sound</span>
+          {b.sounds.filter((s) => s.has_file).length === 0 ? (
+            <Alert kind="warn">The campaign has no sound files yet. Upload one on the campaign page.</Alert>
+          ) : (
+            <>
+              <select className="select" value={draft.sound_id ?? ""} onChange={(e) => set("sound_id", e.target.value || null)}>
+                {b.sounds
+                  .filter((s) => s.has_file)
+                  .map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                      {s.start ? ` (from ${s.start}s)` : ""}
+                    </option>
+                  ))}
+              </select>
+              <div className="grid cols-2">
+                <div className="field">
+                  <label>Sound volume: {Math.round(draft.sound_volume * 100)}%</label>
+                  <input type="range" min={0} max={1.5} step={0.05} value={draft.sound_volume} onChange={(e) => set("sound_volume", +e.target.value)} />
+                  {draft.sound_volume < b.sound_rule.min_volume && <span className="small" style={{ color: "var(--danger)" }}>Below the campaign minimum of {Math.round(b.sound_rule.min_volume * 100)}%.</span>}
+                </div>
+                <div className="field">
+                  <label>Original audio: {Math.round(draft.original_volume * 100)}%</label>
+                  <input type="range" min={0} max={1} step={0.05} value={draft.original_volume} onChange={(e) => set("original_volume", +e.target.value)} />
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+      {b && b.sound_rule.mode === "in_app" && (
+        <Alert kind="info" title="Official sound is added in the app">
+          When posting, add {b.sounds.length ? b.sounds.map((s) => `“${s.name}”`).join(" or ") : "the campaign sound"} from the in-app library at ≥ {Math.round(b.sound_rule.min_volume * 100)}% volume. It's on the export checklist.
+        </Alert>
+      )}
+
+      <div className="stack sm">
+        <span className="section-title">Background music</span>
+        {locked.includes("music") ? (
+          <p className="small muted">This campaign doesn't allow background music.</p>
+        ) : (
+          <>
+            <select className="select" value={draft.music} onChange={(e) => set("music", e.target.value)}>
+              <option value="none">No music</option>
+              <option value="auto">Auto: pick by mood from your library{libCount ? "" : " (library is empty)"}</option>
+              {lib?.moods.map((m) => (
+                <option key={m} value={`mood:${m}`}>
+                  Any {m} track
+                </option>
+              ))}
+              {tracks.map((t) => (
+                <option key={`${t.mood}/${t.name}`} value={`lib:${t.mood}/${t.name}`}>
+                  {t.mood} · {t.name}
+                </option>
+              ))}
+              {clip.edit.music_file && <option value="upload">Uploaded: {clip.edit.music_file}</option>}
+            </select>
+            <div className="row wrap">
+              <button className="btn sm" onClick={() => input.current?.click()} disabled={busy}>
+                {busy ? <Spinner /> : <Icon name="upload" />} Upload a track for this clip
+              </button>
+              <Link className="btn sm ghost" to="/library">
+                <Icon name="library" /> Manage library
+              </Link>
+              <input ref={input} type="file" accept="audio/*" hidden onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (f) upload(f);
+              }} />
+            </div>
+            <div className="field">
+              <label>Music volume: {Math.round(draft.music_volume * 100)}%</label>
+              <input type="range" min={0} max={0.6} step={0.01} value={draft.music_volume} onChange={(e) => set("music_volume", +e.target.value)} disabled={draft.music === "none"} />
+              <span className="hint">The music dips automatically (about 10 dB) while someone is speaking and comes back up in pauses.</span>
+            </div>
+            {clip.analysis.music_used && <span className="tiny muted">Last render used: {clip.analysis.music_used}</span>}
+          </>
+        )}
+      </div>
+
+      <div className="stack sm">
+        <span className="section-title">Sound effects</span>
+        {locked.includes("sfx") ? (
+          <p className="small muted">This campaign doesn't allow sound effects.</p>
+        ) : (
+          <>
+            <div className="seg">
+              {(
+                [
+                  ["auto", "Automatic"],
+                  ["custom", "Choose myself"],
+                  ["off", "Off"],
+                ] as const
+              ).map(([k, l]) => (
+                <button
+                  key={k}
+                  className={draft.sfx === k ? "active" : ""}
+                  onClick={() => {
+                    set("sfx", k);
+                    if (k === "custom" && !draft.sfx_cues.length) set("sfx_cues", clip.analysis.sfx_used ?? []);
+                  }}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+            {draft.sfx === "auto" && <span className="small muted">Pop on the hook title, whoosh on camera cuts, ding on numbers, hit on emphatic lines, riser into the payoff. At most 4, at least 2.5 s apart.</span>}
+            {draft.sfx === "custom" && (
+              <div className="stack sm">
+                {draft.sfx_cues.map((c, i) => (
+                  <div className="cue-row" key={i}>
+                    <select className="select" value={c.type} onChange={(e) => set("sfx_cues", draft.sfx_cues.map((x, j) => (j === i ? { ...x, type: e.target.value as SfxType } : x)))}>
+                      {SFX_TYPES.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                    <input className="input" type="number" step={0.1} min={0} max={draft.end - draft.start} value={c.t} onChange={(e) => set("sfx_cues", draft.sfx_cues.map((x, j) => (j === i ? { ...x, t: Math.max(0, +e.target.value) } : x)))} />
+                    <button className="btn sm icon" title="Listen" aria-label="Listen to this sound effect" onClick={() => new Audio(media.sfx(c.type)).play()}>
+                      <Icon name="play" />
+                    </button>
+                    <button className="btn sm icon danger" aria-label="Remove" onClick={() => set("sfx_cues", draft.sfx_cues.filter((_, j) => j !== i))}>
+                      <Icon name="x" />
+                    </button>
+                  </div>
+                ))}
+                <button className="btn sm" style={{ alignSelf: "flex-start" }} disabled={draft.sfx_cues.length >= 12} onClick={() => set("sfx_cues", [...draft.sfx_cues, { type: "pop", t: 0.1 }])}>
+                  <Icon name="plus" /> Add effect
+                </button>
+                <span className="tiny muted">Times are seconds from the start of the clip. A riser starts at its time and peaks 1.5 s later.</span>
+              </div>
+            )}
+            {draft.sfx === "auto" && clip.analysis.sfx_used && clip.analysis.sfx_used.length > 0 && (
+              <span className="tiny muted">Last render: {clip.analysis.sfx_used.map((c) => `${c.type} @ ${c.t}s`).join(", ")}</span>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// -------------------------------------------------------------------------------- check & export
+function CampaignPanel({ clip, dirty, campaign, onClip }: { clip: Clip; dirty: boolean; campaign: Campaign | null; onClip: () => void }) {
+  const toast = useToast();
+  const comp = usePoll(() => api.compliance(clip.id), [clip.id, clip.version]);
+  const [busy, setBusy] = useState(false);
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  const c: Compliance | null = comp.data;
+  // posted marks: shown at once after a click, then the clip reload catches up
+  const [posted, setPosted] = useState<PostedMap | null>(null);
+  const serverPosted = JSON.stringify(clip.posted ?? {});
+  useEffect(() => setPosted(null), [clip.id, serverPosted]); // the reloaded clip (or another tab's change) takes over
+  const postedNow = posted ?? clip.posted ?? {};
+  const platforms = (clip.post_platforms?.length ? clip.post_platforms : ["reels", "shorts"]) as Platform[];
+  const state = postedState(postedNow, platforms);
+
+  const saveCaption = async (p: string) => {
+    try {
+      await api.patchClip(clip.id, { edit: { post: { [p]: edits[p] ?? "" } } });
+      setEdits((e) => {
+        const n = { ...e };
+        delete n[p];
+        return n;
+      });
+      comp.reload();
+      onClip();
+      toast("Caption saved");
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  };
+  const doExport = async () => {
+    setBusy(true);
+    try {
+      const r = await api.exportClip(clip.id);
+      toast(`Exported to ${r.path}`);
+      onClip();
+      comp.reload();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="stack lg">
+      {dirty && <Alert kind="warn">You have unsaved edits. Save (and re-render) before checking and exporting.</Alert>}
+      {!c ? (
+        comp.error ? <Alert kind="danger">{comp.error}</Alert> : <Spinner />
+      ) : (
+        <>
+          <div className="row between">
+            <div className="row">
+              <Verdict v={c.verdict} />
+              <span className="small muted">{c.campaign ? `Checked against “${c.campaign.name}”` : "General checks (no campaign)"}</span>
+            </div>
+            <button className="btn sm ghost" onClick={comp.reload}>
+              <Icon name="refresh" /> Re-check
+            </button>
+          </div>
+          <CheckList checks={c.checks} tickKey={clip.id} />
+          <div className="divider" />
+          <span className="section-title">Post captions</span>
+          {Object.entries(c.posts).map(([p, post]) => {
+            const val = edits[p] ?? post.caption;
+            return (
+              <div className="stack sm" key={p}>
+                <div className="row between">
+                  <strong className="small">
+                    {PLATFORM_LABEL[p as Platform] ?? p}
+                    {post.edited && <span className="badge" style={{ marginLeft: 6 }}>edited</span>}
+                  </strong>
+                  <div className="row">
+                    {edits[p] !== undefined && (
+                      <button className="btn sm primary" onClick={() => saveCaption(p)}>
+                        Save
+                      </button>
+                    )}
+                    {post.edited && edits[p] === undefined && (
+                      <button
+                        className="btn sm ghost"
+                        onClick={() =>
+                          attempt(toast, async () => {
+                            await api.patchClip(clip.id, { edit: { post: { [p]: "" } } });
+                            comp.reload();
+                            onClip();
+                            toast("Back to the campaign's caption");
+                          })
+                        }
+                        title="Go back to the caption built from the campaign's template"
+                      >
+                        Use template
+                      </button>
+                    )}
+                    <CopyButton text={val} />
+                  </div>
+                </div>
+                {p === "shorts" && (
+                  <div className="row small">
+                    <span className="muted">Title:</span> <span className="ellipsis">{post.title}</span> <CopyButton text={post.title} label="Copy title" />
+                  </div>
+                )}
+                <textarea className="textarea" rows={5} value={val} onChange={(e) => setEdits((x) => ({ ...x, [p]: e.target.value }))} />
+                {post.warnings.map((w) => (
+                  <span key={w} className="small" style={{ color: "var(--warn)" }}>
+                    {w}
+                  </span>
+                ))}
+              </div>
+            );
+          })}
+          <div className="divider" />
+          <div className="stack sm">
+            <span className="section-title">Export package</span>
+            <span className="small muted">A folder with clip.mp4, captions for each platform, checklist.md and manifest.json (timings, scores, music, effects, compliance). Re-exporting replaces it.</span>
+            {clip.exported && <span className="tiny muted mono">Last export: {clip.exported.path}</span>}
+            <div className="row wrap">
+              <button className="btn primary" onClick={doExport} disabled={busy || !clip.has_video || clip.render_status !== "done"}>
+                {busy ? <Spinner /> : <Icon name="package" />} Export{c.verdict === "fail" ? " anyway" : ""}
+              </button>
+              {clip.has_video && clip.render_status === "done" ? (
+                <a className="btn" href={media.exportZip(clip.id)}>
+                  <Icon name="download" /> Download .zip
+                </a>
+              ) : (
+                <button className="btn" disabled title="Render the clip with its latest edits first">
+                  <Icon name="download" /> Download .zip
+                </button>
+              )}
+              {campaign && (
+                <Link className="btn ghost" to={`/campaigns/${campaign.id}`}>
+                  Campaign →
+                </Link>
+              )}
+            </div>
+            {clip.render_status !== "done" && <span className="small muted">Render the clip (with your latest edits) to export.</span>}
+          </div>
+        </>
+      )}
+      <div className="divider" />
+      <div className="stack sm">
+        <div className="row between">
+          <span className="section-title">Mark as posted</span>
+          {state.n > 0 && <span className={`badge ${state.done ? "success" : "info"}`}>{state.done ? "Posted everywhere" : `${state.n} of ${state.total} done`}</span>}
+        </div>
+        <span className="small muted">After posting it in the app, mark it here (add the post's link if you like). Posted clips leave “Ready to post” and are never deleted by re-processing.</span>
+        {platforms.map((p) => (
+          <div className="posted-block" key={p}>
+            <strong className="small">{PLATFORM_LABEL[p]}</strong>
+            {clip.has_video || postedNow[p] ? (
+              <PostedControl
+                clipId={clip.id}
+                platform={p}
+                posted={postedNow}
+                onChange={(m) => {
+                  setPosted(m);
+                  onClip();
+                }}
+              />
+            ) : (
+              <span className="tiny muted">Render it first</span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// -------------------------------------------------------------------------------- montage
+function MontagePanel({ clip, onClip }: { clip: Clip; onClip: (c: Clip) => void }) {
+  const toast = useToast();
+  const m = clip.edit.montage;
+  const plan = clip.edit.montage_plan;
+  const [pov, setPov] = useState(m?.pov ?? "");
+  const [style, setStyle] = useState(m?.style ?? "normal");
+  const [dropAt, setDropAt] = useState(m?.drop_at ?? 0.4);
+  const [audio, setAudio] = useState(m?.audio ?? "song");
+  const [flash, setFlash] = useState(m?.flash ?? true);
+  const [busy, setBusy] = useState(false);
+  if (!m || !plan) return <Alert kind="warn">This variant has no cut plan. Use “Re-make all variants” on the project page.</Alert>;
+  const changed = pov !== m.pov || style !== m.style || Math.abs(dropAt - m.drop_at) > 0.001 || audio !== m.audio || flash !== m.flash;
+  const go = async (reshuffle: boolean) => {
+    setBusy(true);
+    try {
+      const c = await api.replanMontage(clip.id, { pov, style, drop_at: dropAt, audio, flash, reshuffle, render: true });
+      onClip({ ...c, render_status: "queued" });
+      toast(reshuffle ? "New shots picked; re-rendering…" : "Saved; re-rendering…");
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const fmt = (t: number) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, "0")}`;
+  return (
+    <div className="stack lg">
+      <div className="row wrap small muted" style={{ gap: 12 }}>
+        <span>
+          <strong>{Math.round(plan.tempo)}</strong> BPM
+        </span>
+        <span>
+          Song {fmt(plan.song_start)} → {fmt(plan.song_end)}
+        </span>
+        <span>{plan.drop != null ? `Drop at ${plan.drop.toFixed(1)}s` : "No drop found"}</span>
+        <span>{plan.slots.length} cuts</span>
+      </div>
+      <div className="field">
+        <label>On-screen text (POV)</label>
+        <input className="input" value={pov} maxLength={200} onChange={(e) => setPov(e.target.value)} placeholder="POV: …" />
+      </div>
+      <div className="field">
+        <span className="label-text">Cut style</span>
+        <div className="seg">
+          {(["chill", "normal", "hype"] as const).map((s) => (
+            <button key={s} className={style === s ? "active" : ""} onClick={() => setStyle(s)}>
+              {s}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="field">
+        <label>Drop lands at {Math.round(dropAt * 100)}% of the video</label>
+        <input type="range" min={0.15} max={0.7} step={0.05} value={dropAt} onChange={(e) => setDropAt(+e.target.value)} />
+      </div>
+      <div className="row wrap">
+        <div className="seg">
+          <button className={audio === "song" ? "active" : ""} onClick={() => setAudio("song")}>
+            Song in video
+          </button>
+          <button className={audio === "silent" ? "active" : ""} onClick={() => setAudio("silent")}>
+            Silent (add in app)
           </button>
         </div>
-      ) : (
-        <button className="btn" onClick={() => input.current?.click()} disabled={busy}>
-          {busy ? <Spinner /> : <Icon name="upload" />} Add background music (MP3, M4A, WAV…)
-        </button>
-      )}
-      <input ref={input} type="file" accept="audio/*" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
-      <div className="field">
-        <label>Music volume: {Math.round(draft.music_volume * 100)}%</label>
-        <input type="range" min={0} max={0.5} step={0.01} value={draft.music_volume} onChange={(e) => set("music_volume", +e.target.value)} disabled={!clip.edit.music} />
+        <label className="check small">
+          <input type="checkbox" checked={flash} onChange={(e) => setFlash(e.target.checked)} /> Flash on the drop
+        </label>
       </div>
+      <div className="row wrap">
+        <button className="btn primary" disabled={!changed || busy} onClick={() => go(false)}>
+          {busy ? <Spinner /> : <Icon name="check" />} Save &amp; re-render
+        </button>
+        <button className="btn" disabled={busy} onClick={() => go(true)} title="Pick different shots for this variant">
+          <Icon name="refresh" /> Shuffle shots
+        </button>
+      </div>
+      <details>
+        <summary className="small muted" style={{ cursor: "pointer" }}>
+          Cut list ({plan.slots.length} shots)
+        </summary>
+        <div className="stack sm" style={{ marginTop: 8 }}>
+          {plan.slots.map((s, i) => (
+            <div key={i} className="row small" style={{ gap: 10 }}>
+              <span className="mono muted" style={{ width: 52 }}>{s.at.toFixed(2)}s</span>
+              <span className="ellipsis" style={{ flex: 1 }}>
+                {s.label} @ {fmt(s.t)}
+              </span>
+              <span className="muted">{s.dur.toFixed(2)}s</span>
+              {s.impact && <span className="badge accent">drop</span>}
+            </div>
+          ))}
+        </div>
+      </details>
     </div>
   );
 }

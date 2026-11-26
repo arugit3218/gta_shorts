@@ -39,7 +39,7 @@ class Mode(str, Enum):
 
 
 AspectRatio = Literal["9:16", "1:1", "16:9"]
-Layout = Literal["auto", "center", "blur", "split"]
+Layout = Literal["auto", "center", "blur", "split", "stream"]
 DurationPreset = Literal["15-30", "30-45", "45-60", "60-90", "30-60"]
 
 DURATION_RANGES: dict[str, tuple[float, float]] = {
@@ -72,6 +72,36 @@ class ScoreThresholds(BaseModel):
     review: float = 55
 
 
+class ActionWeightsModel(BaseModel):
+    """How much each signal counts when finding gameplay/action moments (normalised automatically)."""
+
+    audio: float = Field(30, ge=0, le=100)  # gunshots, explosions, impacts
+    motion: float = Field(30, ge=0, le=100)  # fast on-screen action
+    reaction: float = Field(25, ge=0, le=100)  # streamer shouting / laughing / reaction phrases
+    hud: float = Field(15, ge=0, le=100)  # kill feed / HUD flashes (top-right corner)
+
+
+ContentType = Literal["auto", "talk", "gameplay"]
+
+
+class PolishModel(BaseModel):
+    """Retention polish (Phase 4A). Every field can be changed per project, per clip or via a recipe."""
+
+    jumpcut: Literal["off", "light", "normal", "tight"] = "light"  # remove quiet pauses (never gameplay sound)
+    fillers: bool = True  # cut um / uh (when jump cuts are on)
+    zoom: Literal["off", "subtle", "punchy"] = "subtle"  # punch-in zooms
+    emphasis: bool = True  # keyword emphasis in captions
+    emoji: bool = False
+    progress: Literal["off", "top", "bottom"] = "off"
+    hook_style: Literal["box", "dark", "yellow", "banner", "bold", "outline"] = "box"
+    cold_open: bool = False  # show the strongest 2–3 s first as a teaser
+    profanity: Literal["off", "beep", "mute"] = "off"
+    denoise: Literal["off", "light", "strong"] = "off"
+
+
+POLISH_FIELDS = tuple(PolishModel.model_fields)
+
+
 class UserSettings(BaseModel):
     mode: Mode = Mode.low
     # Where sources, renders and temp files live. Can be an external SSD.
@@ -90,6 +120,27 @@ class UserSettings(BaseModel):
     normalise_audio: bool = True
     max_download_height: Literal[720, 1080] = 1080
     min_free_gb: float = Field(default=1.5, ge=0.2)
+    # Downloads: "smart" fetches audio first, then only the video sections clips need (much less
+    # disk); falls back to a full download automatically. "full" downloads the whole video.
+    download_strategy: Literal["smart", "full"] = "smart"
+    use_heatmap: bool = True  # YouTube "Most replayed" data as an extra ranking signal
+    use_creator_subtitles: bool = False  # skip transcription when the uploader's own subtitles exist
+    # Finishing defaults (each can be changed per project / clip; campaigns can forbid music/SFX)
+    music_default: Literal["none", "auto"] = "auto"  # auto = pick from your music library (if any)
+    sfx_default: bool = True
+    blur_burned_default: Literal["auto", "off"] = "auto"
+    hook_overlay_default: bool = True
+    voice_enhance: bool = True
+    polish: PolishModel = PolishModel()
+    # Framing: what Auto does without a big face. "fill" crops to fill the 9:16 frame (immersive);
+    # "blur" shows the whole frame with blurred bars. Auto can also detect a streamer's webcam.
+    auto_fallback: Literal["fill", "blur"] = "fill"
+    auto_stream: bool = True
+    follow_action: bool = True  # fill crops drift towards where the motion is (no faces needed)
+    # What kind of videos: talk (podcasts, interviews) = speech-driven; gameplay (streams, games,
+    # sports) = action-driven + speech; auto decides from how much is said.
+    content_type: ContentType = "auto"
+    action_weights: ActionWeightsModel = ActionWeightsModel()
     weights: ScoringWeights = ScoringWeights()
     thresholds: ScoreThresholds = ScoreThresholds()
     # Optional local LLM (Ollama). Off by default; the app works fully without it.
@@ -203,6 +254,18 @@ class Paths:
     @property
     def cache(self) -> Path:
         p = self.work / "cache"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    @property
+    def library(self) -> Path:
+        p = self.work / "library"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    @property
+    def campaigns(self) -> Path:
+        p = self.work / "campaigns"
         p.mkdir(parents=True, exist_ok=True)
         return p
 

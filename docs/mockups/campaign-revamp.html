@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Campaign Revamp Mockup</title>
+<link rel="stylesheet" href="../../frontend/src/styles.css" />
+<style>
+  html, body { min-height: 100%; background: var(--bg); }
+  .app { min-height: calc(100vh - 44px); }
+  .mock-bar { position: sticky; top: 0; z-index: 50; display: flex; gap: 6px; align-items: center; padding: 8px 14px; background: #16161d; color: #fff; font-size: 12.5px; flex-wrap: wrap; }
+  .mock-bar strong { margin-right: 8px; }
+  .mock-bar button { background: #2a2a36; color: #ddd; border: 0; border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 12.5px; }
+  .mock-bar button.on { background: #6d4aff; color: #fff; }
+  .screen { display: none; }
+  .screen.on { display: block; }
+  .nav-create { margin: 4px 8px 10px; justify-content: center; }
+  .type-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+  .type-card { border: 2px solid var(--border); border-radius: var(--radius); padding: 18px; background: var(--bg-elev); cursor: pointer; display: flex; flex-direction: column; gap: 8px; }
+  .type-card.on { border-color: var(--accent); background: var(--accent-soft); }
+  .type-card .ico { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+  .type-card.on .ico { background: var(--accent); color: #fff; }
+  .type-card h3 { margin: 0; font-size: 16px; }
+  .type-card ul { margin: 2px 0 0; padding-left: 18px; color: var(--text-2); font-size: 12.5px; line-height: 1.6; }
+  .understood { display: grid; grid-template-columns: 1.25fr 1fr; gap: 16px; align-items: start; }
+  .u-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .u-row:last-child { border-bottom: 0; }
+  .u-row .ok { color: var(--success); flex: none; margin-top: 1px; }
+  .u-row .need { color: var(--warn); flex: none; margin-top: 1px; }
+  .u-row .what { flex: 1; min-width: 0; }
+  .u-row .what b { display: block; font-size: 13.5px; }
+  .u-row .what span { color: var(--text-3); font-size: 12.5px; }
+  .u-row .src { font-size: 11.5px; color: var(--text-3); font-style: italic; margin-top: 3px; display: block; }
+  .name-inline { display: inline-flex; align-items: center; gap: 8px; }
+  .name-inline .pencil { color: var(--text-3); cursor: pointer; }
+  .cols-main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 18px; align-items: start; }
+  .setup-item { display: flex; gap: 10px; align-items: center; padding: 9px 0; font-size: 13.5px; border-bottom: 1px solid var(--border); }
+  .setup-item:last-child { border-bottom: 0; }
+  .dot-ok { width: 20px; height: 20px; border-radius: 99px; background: var(--success-soft); color: var(--success); display: grid; place-items: center; flex: none; }
+  .dot-todo { width: 20px; height: 20px; border-radius: 99px; background: var(--warn-soft); color: var(--warn); display: grid; place-items: center; flex: none; }
+  .video-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .video-row:last-child { border-bottom: 0; }
+  .thumb { width: 64px; height: 40px; border-radius: 7px; background: linear-gradient(135deg, #3b2b7a, #1a1a2e); }
+  .thumb.b { background: linear-gradient(135deg, #7a2b4a, #2e1a1a); }
+  .thumb.c { background: linear-gradient(135deg, #2b6a7a, #1a252e); }
+  .style-tile { border: 2px solid var(--border); border-radius: 10px; padding: 8px; display: flex; flex-direction: column; gap: 6px; align-items: center; font-size: 12px; font-weight: 600; cursor: pointer; background: var(--bg-elev); }
+  .style-tile.on { border-color: var(--accent); }
+  .mini-phone { width: 62px; aspect-ratio: 9/16; border-radius: 7px; background: linear-gradient(160deg, #2d2d3d, #111); position: relative; overflow: hidden; }
+  .mini-phone .cap { position: absolute; left: 6px; right: 6px; bottom: 30%; text-align: center; font-size: 8px; font-weight: 900; color: #fff; text-shadow: 0 1px 2px #000; }
+  .mini-phone .cap i { font-style: normal; color: #FFD300; }
+  .ready-row { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .ready-row:last-child { border-bottom: 0; }
+  .ready-row .t { width: 30px; height: 52px; border-radius: 5px; background: linear-gradient(160deg, #3b2b7a, #111); flex: none; }
+  .req-grid { display: grid; grid-template-columns: 330px minmax(0, 1fr); gap: 18px; align-items: start; }
+  .frame { position: relative; aspect-ratio: 9/16; width: 100%; border-radius: 16px; overflow: hidden; background: linear-gradient(170deg, #2a3550 0%, #1b2233 55%, #0f131d 100%); user-select: none; }
+  .frame .ui { position: absolute; background: rgba(229, 36, 43, 0.28); border: 1px dashed rgba(255, 90, 90, 0.9); }
+  .frame .ui span { position: absolute; font-size: 9.5px; color: #ffd0d0; font-weight: 700; padding: 3px 5px; }
+  .frame .logo { position: absolute; width: 30%; padding: 7px 0; border-radius: 6px; background: #fff; color: #111; font-weight: 900; font-size: 12px; text-align: center; cursor: grab; box-shadow: 0 0 0 2px var(--accent), 0 6px 18px rgba(0,0,0,.4); }
+  .frame .logo:active { cursor: grabbing; }
+  .frame .logo .h { position: absolute; width: 10px; height: 10px; background: var(--accent); border: 2px solid #fff; border-radius: 3px; right: -6px; bottom: -6px; cursor: nwse-resize; }
+  .frame .scene { position: absolute; inset: 22% 10% 40%; border-radius: 10px; background: radial-gradient(circle at 40% 40%, #5a7bd8 0, #2b3c75 45%, transparent 70%); opacity: .7; }
+  .frame .capline { position: absolute; left: 12%; right: 12%; top: 58%; text-align: center; color: #fff; font-weight: 900; font-size: 15px; text-shadow: 0 2px 4px #000; }
+  .frame .capline i { font-style: normal; color: #FFD300; }
+  .placement-status { margin-top: 10px; }
+  .sound-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .sound-card { border: 2px solid var(--border); border-radius: 10px; padding: 12px; font-size: 12.5px; color: var(--text-2); cursor: pointer; background: var(--bg-elev); }
+  .sound-card b { display: block; color: var(--text); font-size: 13.5px; margin-bottom: 4px; }
+  .sound-card.on { border-color: var(--accent); background: var(--accent-soft); }
+  .from-brief { display: inline-flex; gap: 4px; align-items: center; font-size: 11px; font-weight: 650; color: var(--info); background: var(--info-soft); border-radius: 99px; padding: 2px 8px; }
+  .q-row { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .q-row:last-child { border-bottom: 0; }
+  .q-row .q b { display: block; font-size: 13.5px; }
+  .q-row .q span { font-size: 12.5px; color: var(--text-3); }
+  .caption-box { white-space: pre-wrap; font-size: 13.5px; line-height: 1.55; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; font-family: var(--font); }
+  .caption-box mark { background: var(--accent-soft); color: var(--accent); border-radius: 4px; padding: 0 3px; }
+  .caption-box mark.req { background: var(--success-soft); color: var(--success); }
+  .tag-legend { display: flex; gap: 12px; font-size: 11.5px; color: var(--text-3); margin-top: 8px; flex-wrap: wrap; }
+  .tag-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
+  .cl-item { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+  .cl-item:last-child { border-bottom: 0; }
+  .cl-item .auto { margin-left: auto; font-size: 11px; color: var(--text-3); white-space: nowrap; }
+  .cl-box { width: 18px; height: 18px; border: 2px solid var(--border-strong); border-radius: 5px; flex: none; margin-top: 1px; }
+  details.adv { border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; background: var(--bg-elev); }
+  details.adv summary { cursor: pointer; font-weight: 600; font-size: 13px; color: var(--text-2); }
+  .explain { font-size: 12.5px; color: var(--text-3); margin: -4px 0 0; }
+  .help-link { font-size: 12px; color: var(--accent); cursor: pointer; font-weight: 600; }
+  .range-pair { display: flex; gap: 10px; align-items: center; }
+  .range-pair .input { width: 84px; }
+  .note { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 10px 12px; border-radius: 6px; font-size: 12.5px; color: var(--text-2); }
+  .brief-raw { white-space: pre-wrap; font-size: 12.5px; color: var(--text-2); background: var(--bg-sunken); border-radius: 10px; padding: 14px; max-height: 300px; overflow: auto; border: 1px solid var(--border); }
+  .mock-note { font-size: 12px; color: var(--text-3); margin-top: 26px; border-top: 1px dashed var(--border); padding-top: 10px; }
+</style>
+</head>
+<body>
+<div class="mock-bar">
+  <strong>Mockup: campaign revamp (R1)</strong>
+  <button data-go="1">1 · New campaign</button>
+  <button data-go="2">2 · What we understood</button>
+  <button data-go="3">3 · Overview</button>
+  <button data-go="4">4 · Requirements</button>
+  <button data-go="5">5 · Posting</button>
+  <button data-go="6">6 · Brief</button>
+</div>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><div class="brand-mark" data-i="scissors"></div><span>ClipStudio</span></div>
+    <button class="btn primary nav-create"><span data-i="plus"></span> Create</button>
+    <a class="nav-link"><span data-i="home"></span><span>Home</span></a>
+    <a class="nav-link active"><span data-i="target"></span><span>Campaigns</span></a>
+    <a class="nav-link"><span data-i="film"></span><span>Videos</span></a>
+    <a class="nav-link"><span data-i="library"></span><span>Library</span></a>
+    <a class="nav-link"><span data-i="settings"></span><span>Settings</span></a>
+  </aside>
+  <main class="main">
+
+  <!-- ============================== 1. NEW CAMPAIGN ============================== -->
+  <section class="screen" data-s="1">
+    <div class="page-head"><div><h1>New campaign</h1><p class="sub">Two steps. You can change anything later.</p></div></div>
+    <div class="stack lg" style="max-width: 940px">
+      <div class="stack">
+        <h2 style="margin:0;font-size:15px">1. What kind of campaign is it?</h2>
+        <div class="type-cards">
+          <div class="type-card"><div class="ico" data-i="scissors" data-s="20"></div><h3>Clips</h3><p class="small muted" style="margin:0">Cut the best moments from long videos (streams, podcasts, gameplay).</p><ul><li>Captions + title at the start</li><li>Finds highlights for you</li></ul></div>
+          <div class="type-card on"><div class="ico" data-i="image" data-s="20"></div><h3>Logo</h3><p class="small muted" style="margin:0">Clips with the brand's logo on screen the whole time.</p><ul><li>Everything in Clips</li><li>Logo placed where the brand wants it</li></ul></div>
+          <div class="type-card"><div class="ico" data-i="music" data-s="20"></div><h3>Music</h3><p class="small muted" style="margin:0">Short edits cut to a song's beat, for promoting a track.</p><ul><li>Beat-synced montage</li><li>No captions, song stays loud</li></ul></div>
+        </div>
+        <span class="small muted">UGC (your own on-camera videos) comes later.</span>
+      </div>
+      <div class="stack">
+        <h2 style="margin:0;font-size:15px">2. Paste the brief</h2>
+        <textarea class="textarea" rows="9">Logo Campaign — $1.50 per 1,000 views, max payout $500
+Videos must be 15–60 seconds. Post on Instagram Reels and YouTube Shorts.
+Place the provided logo using the LOGO_PRE_PLACED template, do not move or resize.
+Disclose the post as paid: add #ad or #sponsored in the caption
+Paste this into every caption exactly as written ↓
+"Please Play Responsibly, 19+ and physically located in Ontario. Concerned about your Gambling? Call 1-866-531-2600 or visit connexontario.ca"
+No background music. Minimum 3% engagement. Keep posts live for 30 days.</textarea>
+        <span class="small muted">We read it and show you what we understood before anything is saved. No brief? <a class="help-link">Fill it in yourself</a></span>
+      </div>
+      <div class="row" style="justify-content:flex-end"><button class="btn primary lg" data-go="2"><span data-i="sparkles"></span> Read the brief</button></div>
+    </div>
+  </section>
+
+  <!-- ============================== 2. WHAT WE UNDERSTOOD ============================== -->
+  <section class="screen" data-s="2">
+    <div class="page-head"><div><h1>Here's what we understood</h1><p class="sub">Check it, fix anything that's wrong, then create the campaign.</p></div></div>
+    <div class="stack lg" style="max-width: 1080px">
+      <div class="grid cols-2" style="max-width: 640px">
+        <div class="field"><label>Campaign name</label><input class="input" value="Logo campaign · Ontario" /></div>
+        <div class="field"><label>Type</label><div class="seg"><button>Clips</button><button class="active">Logo</button><button>Music</button></div></div>
+      </div>
+      <div class="understood">
+        <div class="card">
+          <div class="card-head"><h2>Changes how your videos are made</h2><span class="badge success">6 found</span></div>
+          <div class="card-body" style="padding-top:4px;padding-bottom:4px">
+            <div class="u-row"><span class="ok" data-i="check"></span><div class="what"><b>Clips are 15–60 seconds</b><span>Clips are cut to fit this length.</span><span class="src">"Videos must be 15–60 seconds"</span></div><button class="btn sm ghost" data-i="edit"></button></div>
+            <div class="u-row"><span class="need" data-i="alert"></span><div class="what"><b>Brand logo on screen the whole time</b><span>Upload the logo file and place it on the next screen.</span><span class="src">"Place the provided logo… do not move or resize"</span></div><button class="btn sm">Upload logo</button></div>
+            <div class="u-row"><span class="ok" data-i="check"></span><div class="what"><b>#ad goes in every caption</b><span>Added at the end of the caption automatically.</span><span class="src">"add #ad or #sponsored in the caption"</span></div><button class="btn sm ghost" data-i="edit"></button></div>
+            <div class="u-row"><span class="ok" data-i="check"></span><div class="what"><b>Required caption text, exactly as written</b><span>"Please Play Responsibly, 19+ and physically located in Ontario…". Every caption is checked for it.</span><span class="src">"Paste this into every caption exactly as written"</span></div><button class="btn sm ghost" data-i="edit"></button></div>
+            <div class="u-row"><span class="ok" data-i="check"></span><div class="what"><b>No background music</b><span>Background music stays off for this campaign's clips.</span><span class="src">"No background music"</span></div><button class="btn sm ghost" data-i="edit"></button></div>
+            <div class="u-row"><span class="ok" data-i="check"></span><div class="what"><b>Instagram Reels + YouTube Shorts</b><span>Keeps the logo and captions clear of each app's buttons. Hashtags stay within each app's limit.</span></div><button class="btn sm ghost" data-i="edit"></button></div>
+          </div>
+        </div>
+        <div class="stack">
+          <div class="card">
+            <div class="card-head"><h2>For your reference</h2><span class="small muted">doesn't change videos</span></div>
+            <div class="card-body">
+              <dl class="kv">
+                <dt>Pay</dt><dd>$1.50 per 1,000 views</dd>
+                <dt>Max payout</dt><dd>$500</dd>
+                <dt>Min engagement</dt><dd>3%</dd>
+                <dt>Keep posts live</dt><dd>30 days</dd>
+              </dl>
+              <p class="explain" style="margin-top:10px">Kept in the campaign's Brief tab. Later used to track earnings.</p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>Goes on your "Before you post" list</h2></div>
+            <div class="card-body stack sm small">
+              <div class="row"><span data-i="clipboard"></span> Keep the post live for 30 days</div>
+              <div class="row"><span data-i="clipboard"></span> Engagement of at least 3%</div>
+              <p class="explain" style="margin-top:6px">Things only you can do, shown when you export a clip.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="row" style="justify-content:space-between">
+        <button class="btn ghost" data-go="1"><span data-i="chevronLeft"></span> Back to the brief</button>
+        <button class="btn primary lg" data-go="3"><span data-i="check"></span> Create campaign</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== CAMPAIGN HEADER (shared by 3–6) ============================== -->
+  <template id="camp-head">
+    <div class="page-head" style="margin-bottom:10px">
+      <div style="min-width:0">
+        <a class="small muted row" style="gap:4px;margin-bottom:6px"><span data-i="chevronLeft" data-s="14"></span> Campaigns</a>
+        <div class="row" style="gap:10px">
+          <h1 class="name-inline">Logo campaign · Ontario <span class="pencil" data-i="edit"></span></h1>
+          <span class="badge accent">Logo</span><span class="badge">Clipster</span>
+        </div>
+        <p class="sub">2 videos · 14 clips · 5 approved · 3 ready to post</p>
+      </div>
+      <div class="row">
+        <button class="btn sm"><span data-i="package"></span> Export ready clips</button>
+        <button class="btn primary"><span data-i="plus"></span> Add videos</button>
+      </div>
+    </div>
+    <div class="tabs" role="tablist">
+      <button data-tab="3">Overview</button>
+      <button data-tab="4">Requirements</button>
+      <button data-tab="5">Posting</button>
+      <button data-tab="6">Brief</button>
+    </div>
+  </template>
+
+  <!-- ============================== 3. OVERVIEW ============================== -->
+  <section class="screen" data-s="3">
+    <div class="head-slot"></div>
+    <div class="cols-main">
+      <div class="stack lg">
+        <div class="card">
+          <div class="card-head"><h2>Add videos</h2><span class="small muted">Clips are made with this campaign's requirements and style</span></div>
+          <div class="card-body stack">
+            <div class="seg"><button class="active"><span data-i="upload" data-s="13"></span> Upload files</button><button><span data-i="link" data-s="13"></span> Paste links</button></div>
+            <div class="dropzone" style="padding:24px 20px"><div class="big-icon" data-i="upload" data-s="22"></div><h3 style="margin:0">Drop videos here or click to browse</h3><p class="muted small" style="margin:6px 0 0">One or several files</p></div>
+            <div class="row between">
+              <div class="row" style="gap:12px">
+                <div class="mini-phone" style="width:34px"><div class="cap" style="font-size:5px">BIG <i>WIN</i></div></div>
+                <div><div class="small"><b>Style: Gaming / Stream</b></div><div class="tiny muted">Bold captions · punchy edits · title at the start · auto framing</div></div>
+              </div>
+              <div class="row"><span class="small muted">Up to 8 clips per video</span><button class="btn sm">Change style</button></div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Videos</h2><span class="small muted">2</span></div>
+          <div class="card-body" style="padding-top:4px;padding-bottom:4px">
+            <div class="video-row"><div class="thumb"></div><div style="min-width:0"><b class="ellipsis" style="display:block">Big win stream · Nov 21</b><span class="small muted">2h 14m · 8 clips · 3 approved</span></div><span class="badge success">ready</span><button class="btn sm">Review clips <span data-i="chevronRight" data-s="14"></span></button></div>
+            <div class="video-row"><div class="thumb b"></div><div style="min-width:0"><b class="ellipsis" style="display:block">Slots highlights podcast</b><span class="small muted">58m · finding clips · about 6 min left</span><div class="bar" style="margin-top:6px"><div style="width:62%"></div></div></div><span class="badge accent">processing</span><button class="btn sm ghost">Open</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="stack lg">
+        <div class="card">
+          <div class="card-head"><h2>Setup</h2><span class="small muted">3 of 4 done</span></div>
+          <div class="card-body" style="padding-top:4px;padding-bottom:4px">
+            <div class="setup-item"><span class="dot-ok" data-i="check" data-s="12"></span> Brief read</div>
+            <div class="setup-item"><span class="dot-todo" data-i="alert" data-s="12"></span> Upload and place the logo <button class="btn sm" style="margin-left:auto" data-go="4">Do it</button></div>
+            <div class="setup-item"><span class="dot-ok" data-i="check" data-s="12"></span> Caption ready (#ad + required text)</div>
+            <div class="setup-item"><span class="dot-ok" data-i="check" data-s="12"></span> Style chosen</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Ready to post</h2><span class="badge success">3</span></div>
+          <div class="card-body" style="padding-top:4px;padding-bottom:4px">
+            <div class="ready-row"><span class="t"></span><div style="flex:1;min-width:0"><b class="ellipsis" style="display:block">He hit the 500x on the last spin</b><span class="tiny muted">0:34 · all checks passed</span></div><button class="btn sm">Post</button></div>
+            <div class="ready-row"><span class="t"></span><div style="flex:1;min-width:0"><b class="ellipsis" style="display:block">Chat went crazy after this</b><span class="tiny muted">0:41 · all checks passed</span></div><button class="btn sm">Post</button></div>
+            <div class="ready-row"><span class="t"></span><div style="flex:1;min-width:0"><b class="ellipsis" style="display:block">Nobody expected this bonus</b><span class="tiny muted">0:22 · all checks passed</span></div><button class="btn sm">Post</button></div>
+          </div>
+        </div>
+        <div class="note">"Post" opens the caption to copy, the video to download and the "Before you post" checklist, all on one screen.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== 4. REQUIREMENTS ============================== -->
+  <section class="screen" data-s="4">
+    <div class="head-slot"></div>
+    <div class="req-grid">
+      <div class="stack">
+        <div class="frame" id="frame">
+          <div class="scene"></div>
+          <div class="capline">HE HIT THE <i>500X</i></div>
+          <div class="ui" style="right:0;top:42%;width:16%;bottom:14%"><span style="right:0;top:0">like · share</span></div>
+          <div class="ui" style="left:0;right:0;bottom:0;height:14%"><span>caption · username</span></div>
+          <div class="ui" style="left:0;right:0;top:0;height:7%"><span>Reels header</span></div>
+          <div class="logo" id="logo" style="left:6%;top:9%">BRAND<span class="h"></span></div>
+        </div>
+        <div class="seg" style="align-self:center"><button class="active">Instagram Reels</button><button>YouTube Shorts</button></div>
+      </div>
+      <div class="stack lg">
+        <div class="card">
+          <div class="card-head"><h2>Logo</h2><span class="from-brief"><span data-i="info" data-s="11"></span> from the brief</span></div>
+          <div class="card-body stack">
+            <p class="explain" style="margin:0">Drag the logo on the preview to place it. Drag the corner to resize. <b style="color:var(--danger)">Red areas</b> are covered by Instagram/YouTube buttons and text, so a logo there is hidden.</p>
+            <div class="placement-status" id="pstatus"></div>
+            <div class="row"><button class="btn sm"><span data-i="upload"></span> Replace logo file</button><button class="btn sm ghost">Use the brand's template GIF instead</button></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Clip length</h2><span class="from-brief"><span data-i="info" data-s="11"></span> from the brief</span></div>
+          <div class="card-body stack">
+            <div class="range-pair"><input class="input" value="15" /> <span class="muted">to</span> <input class="input" value="60" /> <span class="muted">seconds</span></div>
+            <p class="explain" style="margin:0">Clips are cut to fit this length.</p>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Sound</h2><a class="help-link">What's this?</a></div>
+          <div class="card-body stack">
+            <div class="sound-cards">
+              <div class="sound-card on"><b>No required sound</b>Clips keep their own audio.</div>
+              <div class="sound-card"><b>Add the sound when posting</b>You pick the brand's sound inside Instagram/YouTube. We tell you where to start it.</div>
+              <div class="sound-card"><b>Put the sound in the video</b>Upload the sound file and we mix it into every clip.</div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>What the brand allows</h2></div>
+          <div class="card-body" style="padding-top:4px;padding-bottom:4px">
+            <div class="q-row"><div class="q"><b>Add our own background music or sound effects?</b><span>Brief says no background music, so it stays off for every clip.</span></div><div class="seg"><button>Yes</button><button class="active">No</button></div></div>
+            <div class="q-row"><div class="q"><b>Title text for the first few seconds?</b><span>A short hook like "Nobody expected this" at the top. Helps people keep watching.</span></div><div class="seg"><button class="active">Yes</button><button>No</button></div></div>
+            <div class="q-row"><div class="q"><b>Where will you post?</b><span>Keeps the logo and captions clear of each app's buttons.</span></div><div class="row"><label class="check small"><input type="checkbox" checked /> Reels</label><label class="check small"><input type="checkbox" checked /> Shorts</label></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== 5. POSTING ============================== -->
+  <section class="screen" data-s="5">
+    <div class="head-slot"></div>
+    <div class="grid cols-2" style="align-items:start">
+      <div class="card">
+        <div class="card-head"><h2>Caption</h2><div class="seg"><button class="active">Reels</button><button>Shorts</button></div></div>
+        <div class="card-body stack">
+          <p class="explain" style="margin:0">Every clip gets a caption like this. The first line is the clip's own hook.</p>
+<div class="caption-box">He hit the 500x on the last spin 🤯
+
+#casino #bigwin #streamer
+
+<mark>#ad</mark>
+<mark class="req">Please Play Responsibly, 19+ and physically located in Ontario. Concerned about your Gambling? Call 1-866-531-2600 or visit connexontario.ca</mark></div>
+          <div class="tag-legend"><span><i style="background:var(--accent-soft)"></i>paid-post label</span><span><i style="background:var(--success-soft)"></i>required text, checked on every clip</span></div>
+          <div class="field"><label>Required caption text (exact)</label><textarea class="textarea" rows="3">Please Play Responsibly, 19+ and physically located in Ontario. Concerned about your Gambling? Call 1-866-531-2600 or visit connexontario.ca</textarea><span class="hint">A clip fails the check if this is missing or changed.</span></div>
+          <div class="grid cols-2">
+            <div class="field"><label>Paid-post label</label><input class="input" value="#ad" /></div>
+            <div class="field"><label>Required hashtags / @mentions</label><input class="input" placeholder="none" /></div>
+          </div>
+          <details class="adv"><summary>Edit the caption layout</summary><p class="small muted">Reorder or remove parts of the caption (hook, hashtags, label, required text).</p></details>
+          <details class="adv"><summary>Text rules: English only, banned words</summary><p class="small muted">English only: off · Banned words: 0</p></details>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Before you post</h2><span class="small muted">shown on every clip's Post screen</span></div>
+        <div class="card-body stack sm">
+          <div class="section-title small muted" style="font-weight:650">CHECKED AUTOMATICALLY</div>
+          <div class="cl-item"><span class="dot-ok" data-i="check" data-s="12"></span>Logo visible the whole clip, not under app buttons<span class="auto">auto</span></div>
+          <div class="cl-item"><span class="dot-ok" data-i="check" data-s="12"></span>Length 15–60 s<span class="auto">auto</span></div>
+          <div class="cl-item"><span class="dot-ok" data-i="check" data-s="12"></span>#ad and required text in the caption<span class="auto">auto</span></div>
+          <div class="cl-item"><span class="dot-ok" data-i="check" data-s="12"></span>No background music<span class="auto">auto</span></div>
+          <div class="section-title small muted" style="font-weight:650;margin-top:10px">YOU TICK THESE</div>
+          <div class="cl-item"><span class="cl-box"></span>Post from an account that fits the campaign's niche</div>
+          <div class="cl-item"><span class="cl-box"></span>Keep the post live for 30 days</div>
+          <div class="cl-item"><span class="cl-box"></span>Submit the post link to the campaign</div>
+          <button class="btn sm ghost" style="align-self:flex-start;margin-top:6px"><span data-i="plus"></span> Add a step</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== 6. BRIEF ============================== -->
+  <section class="screen" data-s="6">
+    <div class="head-slot"></div>
+    <div class="grid cols-2" style="align-items:start">
+      <div class="stack lg">
+        <div class="card">
+          <div class="card-head"><h2>Pay &amp; targets</h2><span class="small muted">for your reference</span></div>
+          <div class="card-body">
+            <dl class="kv"><dt>Pay</dt><dd>$1.50 per 1,000 views</dd><dt>Max payout</dt><dd>$500</dd><dt>Min views</dt><dd>–</dd><dt>Min engagement</dt><dd>3%</dd><dt>Keep posts live</dt><dd>30 days</dd><dt>Brief link</dt><dd><a>clipster.com/campaigns/…</a></dd></dl>
+            <p class="explain" style="margin-top:12px">These don't change your videos. They're kept for your records and will power earnings tracking later.</p>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Notes for AI picks</h2></div>
+          <div class="card-body stack"><textarea class="textarea" rows="3" placeholder="e.g. Focus on big-win reactions, avoid losses"></textarea><p class="explain" style="margin:0">Only used when you ask an AI chat to pick clips (AI picks on a video).</p></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Original brief</h2><button class="btn sm"><span data-i="clipboard"></span> Paste updated brief</button></div>
+        <div class="card-body"><div class="brief-raw">Logo Campaign — $1.50 per 1,000 views, max payout $500
+Videos must be 15–60 seconds. Post on Instagram Reels and YouTube Shorts.
+Place the provided logo using the LOGO_PRE_PLACED template, do not move or resize.
+Disclose the post as paid: add #ad or #sponsored in the caption
+Paste this into every caption exactly as written ↓
+"Please Play Responsibly, 19+ and physically located in Ontario. Concerned about your Gambling? Call 1-866-531-2600 or visit connexontario.ca"
+No background music. Minimum 3% engagement. Keep posts live for 30 days.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <p class="mock-note">Mockup only: static data, no buttons do anything except switching screens and dragging the logo (screen 4). Built with ClipStudio's real stylesheet.</p>
+  </main>
+</div>
+<script>
+const ICONS = {"home": "M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z", "plus": "M12 5v14M5 12h14", "film": "M4 4h16v16H4zM8 4v16M16 4v16M4 8h4M4 12h4M4 16h4M16 8h4M16 12h4M16 16h4", "settings": "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z", "upload": "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12", "link": "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71", "check": "M20 6 9 17l-5-5", "x": "M18 6 6 18M6 6l12 12", "edit": "M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z", "play": "M6 4l14 8-14 8z", "target": "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4z", "library": "M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z", "copy": "M20 9h-9a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2zM5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1", "volume": "M11 5 6 9H2v6h4l5 4zM19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07", "package": "M16.5 9.4 7.55 4.24M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16zM3.27 6.96 12 12.01l8.73-5.05M12 22.08V12", "clipboard": "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2M9 2h6v4H9zM9 14l2 2 4-4", "eye": "M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z", "image": "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 21", "music": "M9 18V5l12-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM21 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z", "sparkles": "M12 3l1.9 5.8L20 10.7l-6.1 1.9L12 18.4l-1.9-5.8L4 10.7l6.1-1.9zM19 3v4M21 5h-4M5 17v4M7 19H3", "alert": "M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01", "info": "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 16v-4M12 8h.01", "clock": "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2", "shield": "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z", "scissors": "M6 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM20 4 8.12 15.88M14.47 14.48 20 20M8.12 8.12 12 12", "zap": "M13 2 3 14h9l-1 8 10-12h-9z", "layers": "M12 2 2 7l10 5 10-5zM2 17l10 5 10-5M2 12l10 5 10-5", "type": "M4 7V4h16v3M9 20h6M12 4v16", "chevronRight": "M9 18l6-6-6-6", "chevronLeft": "M15 18l-6-6 6-6", "trash": "M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"};
+function paint(root) {
+  root.querySelectorAll("[data-i]").forEach((el) => {
+    if (el.dataset.painted) return;
+    const s = el.dataset.s || 16;
+    const svg = `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${ICONS[el.dataset.i]}"/></svg>`;
+    el.insertAdjacentHTML("afterbegin", svg);
+    el.dataset.painted = 1;
+  });
+}
+document.querySelectorAll(".head-slot").forEach((slot) => slot.appendChild(document.getElementById("camp-head").content.cloneNode(true)));
+paint(document);
+function go(n) {
+  document.querySelectorAll(".screen").forEach((s) => s.classList.toggle("on", s.dataset.s === String(n)));
+  document.querySelectorAll(".mock-bar button").forEach((b) => b.classList.toggle("on", b.dataset.go === String(n)));
+  document.querySelectorAll(`.screen[data-s="${n}"] [data-tab]`).forEach((b) => b.classList.toggle("active", b.dataset.tab === String(n)));
+  history.replaceState(null, "", "?screen=" + n);
+  window.scrollTo(0, 0);
+  if (n == 4) check();
+}
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("[data-go],[data-tab]");
+  if (t) go(t.dataset.go || t.dataset.tab);
+  const tc = e.target.closest(".type-card,.sound-card");
+  if (tc) { tc.parentElement.querySelectorAll(":scope > *").forEach((x) => x.classList.remove("on")); tc.classList.add("on"); }
+  const sb = e.target.closest(".seg button");
+  if (sb && !t) { sb.parentElement.querySelectorAll("button").forEach((x) => x.classList.remove("active")); sb.classList.add("active"); }
+});
+// ---- logo drag / resize with a live check against the covered areas
+const frame = document.getElementById("frame"), logo = document.getElementById("logo"), pst = document.getElementById("pstatus");
+function rect(el) { const f = frame.getBoundingClientRect(), r = el.getBoundingClientRect(); return { l: r.left - f.left, t: r.top - f.top, r: r.right - f.left, b: r.bottom - f.top, w: r.width, h: r.height }; }
+function check() {
+  const L = rect(logo); let over = 0;
+  frame.querySelectorAll(".ui").forEach((u) => { const U = rect(u); const w = Math.max(0, Math.min(L.r, U.r) - Math.max(L.l, U.l)), h = Math.max(0, Math.min(L.b, U.b) - Math.max(L.t, U.t)); over += w * h; });
+  const pct = Math.round((over / (L.w * L.h)) * 100);
+  pst.innerHTML = pct === 0
+    ? `<div class="alert success"><span data-i="check"></span><div class="alert-body"><b>Fully visible.</b> Nothing covers the logo on Reels or Shorts.</div></div>`
+    : `<div class="alert ${pct > 25 ? "danger" : "warn"}"><span data-i="alert"></span><div class="alert-body"><b>${pct}% of the logo is under app buttons.</b> ${pct > 25 ? "The brief allows at most 25%. Move it out of the red area." : "Within the brief's 25% limit, but clearer if you move it."}</div></div>`;
+  paint(pst);
+}
+let drag = null;
+logo.addEventListener("pointerdown", (e) => {
+  const resize = e.target.classList.contains("h"), F = frame.getBoundingClientRect(), L = logo.getBoundingClientRect();
+  drag = { resize, x: e.clientX, y: e.clientY, l: L.left - F.left, t: L.top - F.top, w: L.width, F };
+  logo.setPointerCapture(e.pointerId); e.preventDefault();
+});
+logo.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y, F = drag.F;
+  if (drag.resize) { const w = Math.max(40, Math.min(F.width * 0.8, drag.w + dx)); logo.style.width = (w / F.width) * 100 + "%"; logo.style.fontSize = Math.max(9, w / 8) + "px"; }
+  else { const nl = Math.max(0, Math.min(F.width - logo.offsetWidth, drag.l + dx)), nt = Math.max(0, Math.min(F.height - logo.offsetHeight, drag.t + dy)); logo.style.left = (nl / F.width) * 100 + "%"; logo.style.top = (nt / F.height) * 100 + "%"; }
+  check();
+});
+logo.addEventListener("pointerup", () => (drag = null));
+go(new URLSearchParams(location.search).get("screen") || 1);
+</script>
+</body>
+</html>

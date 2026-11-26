@@ -42,3 +42,27 @@ def safe_filename(name: str, default: str = "video.mp4") -> str:
     stem = re.sub(r"[^A-Za-z0-9._ -]", "_", Path(base).stem)[:80].strip() or "video"
     ext = Path(base).suffix.lower()
     return f"{stem}{ext}"
+
+
+async def save_raw_upload(request, dest: Path, *, max_bytes: int) -> int:
+    """Stream a raw request body to ``dest`` atomically. Returns bytes written."""
+    import os
+
+    size = int(request.headers.get("content-length") or 0)
+    if not 0 < size <= max_bytes:
+        raise InvalidInput(f"File must be under {max_bytes // (1024 * 1024)} MB")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")
+    written = 0
+    try:
+        with part.open("wb") as f:
+            async for chunk in request.stream():
+                written += len(chunk)
+                if written > max_bytes or written > size + 1024 * 1024:
+                    raise InvalidInput("Upload larger than declared size")
+                f.write(chunk)
+        os.replace(part, dest)
+    except Exception:
+        part.unlink(missing_ok=True)
+        raise
+    return written
