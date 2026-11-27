@@ -38,11 +38,11 @@ def title_height(text: str) -> float:
 
 
 @lru_cache(maxsize=64)
-def _logo_mask(file: str, mtime: float, mode: str, x: float, y: float, width: float) -> np.ndarray | None:
+def _logo_mask(file: str, mtime: float, mode: str, x: float, y: float, width: float, key: str | None, crop: tuple[int, ...] | None, image_w: int | None, image_h: int | None) -> np.ndarray | None:
     from ..media.logo import content_mask
 
     try:
-        return content_mask({"file": file, "mode": mode, "x": x, "y": y, "width": width}, GRID_W, GRID_H)
+        return content_mask({"file": file, "mode": mode, "x": x, "y": y, "width": width, "key_color": key, "crop": crop, "image_w": image_w, "image_h": image_h}, GRID_W, GRID_H)
     except Exception:
         return None
 
@@ -52,7 +52,7 @@ def logo_mask(logo: dict | None) -> np.ndarray | None:
     if not logo or not logo.get("file") or not Path(logo["file"]).exists():
         return None
     p = Path(logo["file"])
-    return _logo_mask(str(p), p.stat().st_mtime, logo.get("mode", "free"), float(logo.get("x", 0.5)), float(logo.get("y", 0.22)), float(logo.get("width", 0.4)))
+    return _logo_mask(str(p), p.stat().st_mtime, logo.get("mode", "free"), float(logo.get("x", 0.5)), float(logo.get("y", 0.22)), float(logo.get("width", 0.4)), logo.get("key_color"), tuple(logo["crop"]) if logo.get("crop") else None, logo.get("image_w"), logo.get("image_h"))
 
 
 def blocked_rows(mask: np.ndarray | None, x0: float, x1: float) -> list[Band]:

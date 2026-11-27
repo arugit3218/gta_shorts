@@ -483,6 +483,8 @@ export interface LogoSpec {
   image_w: number | null;
   image_h: number | null;
   zone: LogoZone;
+  /** visible part of a video logo, set by the server */
+  crop?: number[] | null;
   x: number;
   y: number;
   width: number;
@@ -541,6 +543,7 @@ export interface Brief {
   /** overrides of the style ("" = the style's choice) */
   layout: "" | Layout;
   caption_preset: string;
+  captions: boolean;
   /** where captions sit on every clip (centre, fraction of height); null = the caption look's own spot */
   caption_position: number | null;
 }

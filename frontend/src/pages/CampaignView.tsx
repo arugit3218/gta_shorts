@@ -967,7 +967,7 @@ function RequirementsTab({ camp, b, set, setSub, onServer }: { camp: Campaign; b
               platform={plat}
               title={b.hook_overlay.enabled && !music}
               end={b.end_text.enabled && !!b.end_text.text.trim() && !music}
-              captions={music ? undefined : { y: capY, h: capH, onChange: (y) => set("caption_position", y) }}
+              captions={music || !b.captions ? undefined : { y: capY, h: capH, onChange: (y) => set("caption_position", y) }}
               onChange={(p) => setSub("logo", p)}
             />
             <div className="seg" style={{ alignSelf: "center" }} role="tablist" aria-label="Show the buttons of">
@@ -990,7 +990,7 @@ function RequirementsTab({ camp, b, set, setSub, onServer }: { camp: Campaign; b
                 </span>
               )}
             </div>
-            {!music && captionLogoOverlap(b.logo, capY, capH) > 0 && (
+            {!music && b.captions && captionLogoOverlap(b.logo, capY, capH) > 0 && (
               <Alert kind="info">The logo sits where the captions go. On every clip the captions move just above or below the logo automatically, or drag the captions band yourself.</Alert>
             )}
             {b.logo.mode === "none" && <span className="small muted" style={{ textAlign: "center" }}>No logo in this campaign. Drag the captions band to set where captions sit.</span>}
@@ -1115,7 +1115,7 @@ const END_TEMPLATES = ["Follow for part 2", "Link in bio", "Watch the full strea
 
 /** Captions position, title text and end text: everything written on the video, in one place. */
 function TextOnVideoCard({ b, set, setSub, lookY }: { b: Brief; set: SetFn; setSub: SetSubFn; lookY: number }) {
-  const custom = b.caption_position != null;
+  const custom = b.captions && b.caption_position != null;
   const e = b.end_text;
   return (
     <section className="card">
@@ -1125,6 +1125,20 @@ function TextOnVideoCard({ b, set, setSub, lookY }: { b: Brief; set: SetFn; setS
       </div>
       <div className="card-body tight">
         <div className="q-row">
+          <div className="q">
+            <b>Show captions?</b>
+            <span>{b.captions ? "The spoken words are written on every clip." : "No captions on any clip in this campaign."}</span>
+          </div>
+          <div className="seg">
+            <button className={b.captions ? "active" : ""} onClick={() => set("captions", true)}>
+              On
+            </button>
+            <button className={!b.captions ? "active" : ""} onClick={() => set("captions", false)}>
+              Off
+            </button>
+          </div>
+        </div>
+        {b.captions && <div className="q-row">
           <div className="q">
             <b>Where do captions go?</b>
             <span>
@@ -1140,7 +1154,7 @@ function TextOnVideoCard({ b, set, setSub, lookY }: { b: Brief; set: SetFn; setS
               Choose
             </button>
           </div>
-        </div>
+        </div>}
         {custom && (
           <div className="field" style={{ padding: "0 0 12px" }}>
             <label htmlFor="cap-pos">Captions: {Math.round((b.caption_position ?? 0) * 100)}% from the top</label>
@@ -1274,6 +1288,8 @@ function LogoCard({ camp, b, setSub, onServer }: { camp: Campaign; b: Brief; set
     try {
       const c = await api.uploadLogo(camp.id, f);
       onServer(c);
+      const l = c.brief.logo;
+      if (l.crop) setSub("logo", { mode: l.mode, x: l.x, y: l.y, width: l.width, crop: l.crop }); // start where the video has it
       toast(c.notes?.length ? c.notes.join(" ") : "Logo uploaded");
     } catch (e) {
       toast((e as Error).message, "error");
@@ -1291,7 +1307,7 @@ function LogoCard({ camp, b, setSub, onServer }: { camp: Campaign; b: Brief; set
           {(
             [
               ["none", "No logo"],
-              ["free", "Place a logo image"],
+              ["free", "Place a logo"],
               ["template", "Brand's template file"],
             ] as const
           ).map(([k, l]) => (
@@ -1332,13 +1348,19 @@ function LogoCard({ camp, b, setSub, onServer }: { camp: Campaign; b: Brief; set
                 </button>
               </>
             )}
-            <input ref={input} type="file" accept=".png,.gif,.apng,image/png,image/gif,image/apng" hidden onChange={(e) => {
+            <input ref={input} type="file" accept=".png,.gif,.apng,.mp4,.mov,.m4v,.webm,image/png,image/gif,image/apng,video/mp4,video/quicktime,video/webm" hidden onChange={(e) => {
                 const f = e.target.files?.[0];
                 e.target.value = "";
                 if (f) upload(f);
               }} />
           </div>
-          {!logo.has_file && <span className="small muted">PNG with a transparent background{logo.mode === "template" ? ", or GIF for animated templates" : ""}.</span>}
+          {!logo.has_file && <span className="small muted">PNG with a transparent background, GIF, or a video (MP4, MOV, WebM). {logo.mode === "template" ? "A template video needs transparency (MOV or WebM)." : "A green screen in an MP4 is removed automatically."}</span>}
+          {logo.mode === "free" && logo.has_file && (
+            <div className="field">
+              <label htmlFor="logo-size">Size: {Math.round(logo.width * 100)}% of the video width</label>
+              <input id="logo-size" type="range" min={0.08} max={1} step={0.01} value={logo.width} onChange={(e) => setSub("logo", { width: +e.target.value })} />
+            </div>
+          )}
           {logo.mode === "free" && (
             <div className="field">
               <label>See-through: {Math.round((1 - logo.opacity) * 100)}%</label>

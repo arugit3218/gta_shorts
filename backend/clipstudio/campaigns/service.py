@@ -69,6 +69,7 @@ def features(ctx: AppContext, project: dict, clip: dict, brief: Brief | None) ->
         "blur_burned": pick("blur_burned", s.blur_burned_default),
         "voice_enhance": s.voice_enhance,
         "hook_overlay": {"enabled": bool(hook_on), "text": hook_text, "duration": float(hook_cfg.get("duration", hook_dur))},
+        "captions": bool(e.get("captions", True)) and (brief is None or brief.captions),
         "logo": False,
         "disclosure": False,
         "sound_id": None,
@@ -143,7 +144,7 @@ def text_layout(ctx: AppContext, clip: dict, brief: Brief | None, feat: dict) ->
     hook = feat["hook_overlay"]["text"] if feat["hook_overlay"]["enabled"] else None
     end = feat["end_text"]["text"] if feat["end_text"]["enabled"] else None
     try:
-        out = layout(logo=logo, caption_style=style, caption_set_by_clip=by_clip, captions_on=bool((clip.get("edit") or {}).get("captions", True)), hook_text=hook, end_text=end)
+        out = layout(logo=logo, caption_style=style, caption_set_by_clip=by_clip, captions_on=feat["captions"], hook_text=hook, end_text=end)
     except Exception:  # never block a render or the clip list on this
         out = {"caption_position": style.position, "caption_moved": False, "hook_y": 0.2, "hook_moved": False, "end_y": 0.45, "end_moved": False, "logo_band": None, "caption_logo_overlap": 0.0}
     out["caption_source"] = "clip" if by_clip else ("campaign" if brief and brief.caption_position is not None else "look")
@@ -221,7 +222,7 @@ def compliance(ctx: AppContext, project: dict, clip: dict) -> dict:
         width=w,
         height=h,
         has_audio=has_audio,
-        caption_text=" ".join(x.w for x in words) if (clip.get("edit") or {}).get("captions", True) else "",
+        caption_text=" ".join(x.w for x in words) if feat["captions"] else "",
         hook_text=feat["hook_overlay"]["text"] if feat["hook_overlay"]["enabled"] else "",
         end_text=feat["end_text"]["text"] if feat["end_text"]["enabled"] else "",
         end_required=feat["end_text"]["required"],

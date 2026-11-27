@@ -21,7 +21,7 @@ from ..context import AppContext
 from ..db import new_id
 from ..errors import InvalidInput, NotFound
 from ..media.library import AUDIO_EXTS, audio_duration
-from ..media.logo import LOGO_EXTS, inspect_logo
+from ..media.logo import LOGO_EXTS, inspect_logo, is_video, video_preview
 from ..storage import GB, MB, ensure_space
 from ..jobs.worker import Worker
 from .deps import ctx, worker
@@ -235,7 +235,7 @@ def _save(c: AppContext, row: dict, brief: Brief, *, name: str | None = None, st
     return _public(c, get_campaign(c, row["id"]), detail=True)
 
 
-VISUAL_KEYS = {"logo", "disclosure", "hook_overlay", "end_text", "caption_position", "sound_rule", "sounds", "allow_music", "allow_sfx", "output_height"}
+VISUAL_KEYS = {"logo", "captions", "disclosure", "hook_overlay", "end_text", "caption_position", "sound_rule", "sounds", "allow_music", "allow_sfx", "output_height"}
 
 
 @router.get("/campaign-presets")
@@ -348,36 +348,60 @@ async def upload_logo(cid: str, request: Request, filename: str = Query(..., max
     name = safe_filename(filename, "logo.png")
     ext = Path(name).suffix.lower()
     if ext not in LOGO_EXTS:
-        raise InvalidInput("Logo must be a PNG (transparent background), APNG or GIF")
-    ensure_space(c.paths.campaigns, 50 * MB, int(c.settings.get().min_free_gb * GB), "the logo")
+        raise InvalidInput("Logo must be a PNG (transparent background), APNG, GIF, or an MP4, MOV or WebM video")
+    video = is_video(name)
+    limit = (500 if video else 50) * MB
+    ensure_space(c.paths.campaigns, limit, int(c.settings.get().min_free_gb * GB), "the logo")
     d = c.paths.campaigns / cid
     for old in d.glob("logo.*"):
         old.unlink(missing_ok=True)
+    preview = d / "logo_preview.png"
+    preview.unlink(missing_ok=True)
+    (d / "logo_preview_crop.png").unlink(missing_ok=True)
     dest = d / f"logo{ext}"
-    await save_raw_upload(request, dest, max_bytes=50 * MB)
+    await save_raw_upload(request, dest, max_bytes=limit)
+    transparent, key, crop = True, None, None
     try:
         info = inspect_logo(dest)
+        if video:
+            info.width, info.height, transparent, key, crop = video_preview(dest, preview)
+            info.animated = True
     except Exception:
         dest.unlink(missing_ok=True)
+        preview.unlink(missing_ok=True)
         raise
     brief = Brief.model_validate(row["brief"])
-    logo = brief.logo.model_dump() | {"file": str(dest), "file_name": Path(filename).name[:200], "animated": info.animated, "image_w": info.width, "image_h": info.height}
+    logo = brief.logo.model_dump() | {"file": str(dest), "file_name": Path(filename).name[:200], "animated": info.animated, "image_w": crop[2] if crop else info.width, "image_h": crop[3] if crop else info.height, "key_color": key, "crop": crop}
+    full_frame = abs(info.width / info.height - 9 / 16) < 0.02
+    if crop and full_frame:  # start where the video has it; "free" placement can then move and resize it
+        x, y, w, h = crop
+        logo |= {"x": (x + w / 2) / info.width, "y": (y + h / 2) / info.height, "width": max(0.05, min(1.0, w / info.width))}
+        if key:
+            logo["mode"] = "free"
     if logo["mode"] == "none":
         # A full-frame 9:16 transparent file is a pre-placed template; anything else is a logo to place.
-        logo["mode"] = "template" if info.height >= 1000 and abs(info.width / info.height - 9 / 16) < 0.02 else "free"
+        logo["mode"] = "template" if transparent and info.height >= 1000 and abs(info.width / info.height - 9 / 16) < 0.02 else "free"
     brief = brief.model_copy(update={"logo": type(brief.logo).model_validate(logo)})
-    notes = []
+    notes = ["Green screen detected and removed: your clip shows through that area. Drag or resize what's left on the preview."] if key else []
     if logo["mode"] == "template" and (info.width, info.height) != (1080, 1920):
         notes.append(f"Template is {info.width}x{info.height}; it will be scaled to the 1080x1920 frame.")
+    if not transparent:
+        if logo["mode"] == "template":
+            notes.append("This video has no transparency, so as a full-screen template it will hide your clip. Use a transparent MOV or WebM, or choose “Place a logo”.")
+        else:
+            notes.append("This video has no transparency, so it shows as a solid rectangle.")
     return _save(c, row, brief, stale=True) | {"notes": notes}
 
 
 @router.get("/campaigns/{cid}/logo")
-def get_logo(cid: str, c: AppContext = Depends(ctx)):
+def get_logo(cid: str, full: bool = False, c: AppContext = Depends(ctx)):
     brief = Brief.model_validate(get_campaign(c, cid)["brief"])
     if not brief.logo.file or not Path(brief.logo.file).exists():
         raise NotFound("No logo uploaded")
-    return FileResponse(brief.logo.file, headers={"Cache-Control": "no-cache"})
+    path = Path(brief.logo.file)
+    if is_video(path):
+        path = path.with_name("logo_preview_crop.png" if brief.logo.crop and not full else "logo_preview.png")
+    return FileResponse(path, headers={"Cache-Control": "no-cache"})
 
 
 @router.delete("/campaigns/{cid}/logo")
@@ -386,7 +410,9 @@ def delete_logo(cid: str, c: AppContext = Depends(ctx)):
     brief = Brief.model_validate(row["brief"])
     if brief.logo.file:
         Path(brief.logo.file).unlink(missing_ok=True)
-    logo = brief.logo.model_copy(update={"file": None, "file_name": None, "animated": False, "image_w": None, "image_h": None})
+        for name in ("logo_preview.png", "logo_preview_crop.png"):
+            Path(brief.logo.file).with_name(name).unlink(missing_ok=True)
+    logo = brief.logo.model_copy(update={"file": None, "file_name": None, "animated": False, "image_w": None, "image_h": None, "key_color": None, "crop": None})
     return _save(c, row, brief.model_copy(update={"logo": logo}), stale=True)
 
 

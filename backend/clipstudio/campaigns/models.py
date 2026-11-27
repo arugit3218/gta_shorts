@@ -27,6 +27,8 @@ class LogoSpec(BaseModel):
     animated: bool = False
     image_w: int | None = None
     image_h: int | None = None
+    key_color: str | None = None  # green-screen colour detected in a video logo, removed when rendering
+    crop: list[int] | None = None  # visible [x, y, w, h] of a video logo; what "free" placement shows and resizes
     zone: LogoZone = "any"
     x: float = Field(0.5, ge=0, le=1, description="logo centre, fraction of output width")
     y: float = Field(0.22, ge=0, le=1, description="logo centre, fraction of output height")
@@ -127,6 +129,7 @@ class Brief(BaseModel):
     # optional overrides of the style's framing and caption look ("" = what the style uses)
     layout: Literal["", "auto", "center", "blur", "split", "stream"] = ""
     caption_preset: str = Field("", max_length=40)
+    captions: bool = True  # False = no captions on any of this campaign's videos
     # where captions sit for every clip (centre, fraction of the height); None = the caption look's own spot
     caption_position: float | None = Field(None, ge=0.1, le=0.92)
 
@@ -160,7 +163,7 @@ class Brief(BaseModel):
 
 
 # Fields a client may set; file paths are only set by upload endpoints.
-PROTECTED = {("logo", "file"), ("logo", "file_name"), ("logo", "animated"), ("logo", "image_w"), ("logo", "image_h")}
+PROTECTED = {("logo", "file"), ("logo", "file_name"), ("logo", "animated"), ("logo", "image_w"), ("logo", "image_h"), ("logo", "key_color"), ("logo", "crop")}
 
 
 def merge_brief(old: Brief, patch: dict) -> Brief:

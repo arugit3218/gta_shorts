@@ -186,7 +186,7 @@ export function LogoPlacer({
       {z?.nogo.map((rect, i) => box(rect, "nogo", `ng${i}`))}
       {title && box(TITLE_AREA, "title", "title", "title text (first seconds)")}
       {end && box(END_AREA, "title", "end", "end text (last seconds)")}
-      {logo.mode === "template" && logo.has_file && <img className="lp-template" src={media.logo(campaignId, version)} alt="Brand's logo template" />}
+      {logo.mode === "template" && logo.has_file && <img className="lp-template" src={media.logo(campaignId, version, true)} alt="Brand's logo template" />}
       {free && (
         <div
           className="lp-logo"
