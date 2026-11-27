@@ -26,7 +26,7 @@ from ..analysis.highlights import Candidate, _overlap, find_highlights, score_ra
 from ..analysis.scoring import CRITERIA_LABELS, quality_label
 from ..analysis.segmentation import normalise_sentences
 from ..campaigns.posting import posted_ids
-from ..campaigns.service import campaign_brief, features
+from ..campaigns.service import campaign_brief, caption_style_for, features
 from ..cancel import CancelToken
 from ..config import DURATION_RANGES, MODE_PRESETS, UserSettings
 from ..context import AppContext
@@ -37,9 +37,9 @@ from ..media import download as dl
 from ..media import ffmpeg as ff
 from ..media.align import find_offset
 from ..media.burned_text import TextBand
-from ..media.captions import CapWord, resolve_style
+from ..media.captions import CapWord
 from ..media.library import audio_duration, mood_for, pick_track, track_path
-from ..media.overlays import DisclosureText, HookText
+from ..media.overlays import DisclosureText, EndText, HookText
 from ..media.polish import audio_envelope, peak_window
 from ..media.render import RenderResult, RenderSpec, concat_parts, make_thumbnail, plan_timeline, render_clip
 from ..media.sfx import GAIN as SFX_GAIN
@@ -711,7 +711,10 @@ def render_spec(ctx: AppContext, project: dict, clip: dict, *, cancel: CancelTok
 
     # Campaign overlays / sound
     pol = feat["polish"]
-    hook = HookText(feat["hook_overlay"]["text"], feat["hook_overlay"]["duration"], style=pol.get("hook_style", "box")) if feat["hook_overlay"]["enabled"] and feat["hook_overlay"]["text"] else None
+    tl = feat["text_layout"]  # positions that keep text clear of the logo
+    hook = HookText(feat["hook_overlay"]["text"], feat["hook_overlay"]["duration"], y=tl["hook_y"], style=pol.get("hook_style", "box")) if feat["hook_overlay"]["enabled"] and feat["hook_overlay"]["text"] else None
+    et = feat["end_text"]
+    end_text = EndText(et["text"], et["duration"], y=tl.get("end_y", 0.45), style=et["style"], look=et["look"]) if et["enabled"] and et["text"] else None
     disclosure = DisclosureText(brief.disclosure.text, brief.disclosure.corner) if brief and feat["disclosure"] else None
     logo = brief.logo.model_dump() if brief and feat["logo"] and brief.logo.file and Path(brief.logo.file).exists() else None
     sound = None
@@ -742,7 +745,7 @@ def render_spec(ctx: AppContext, project: dict, clip: dict, *, cancel: CancelTok
         auto_fallback=settings.auto_fallback,
         auto_stream=settings.auto_stream,
         words=words,
-        style=resolve_style(edit.get("caption_preset", settings.caption_preset), edit.get("caption_style")),
+        style=caption_style_for(ctx, clip, brief)[0].model_copy(update={"position": tl["caption_position"]}),
         captions=bool(edit.get("captions", True)),
         normalise_audio=settings.normalise_audio,
         max_fps=60.0 if settings.mode.value == "high" else 30.0,
@@ -761,6 +764,7 @@ def render_spec(ctx: AppContext, project: dict, clip: dict, *, cancel: CancelTok
         sfx_gain=SFX_GAIN,
         sfx_on_cuts=feat["sfx"] == "auto",
         hook=hook,
+        end_text=end_text,
         disclosure=disclosure,
         logo=logo,
         blur_burned=feat["blur_burned"],

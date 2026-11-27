@@ -75,6 +75,25 @@ def _required_text(t: str) -> tuple[str, int] | None:
     return None
 
 
+END_TEXT = re.compile(
+    r"(?:end (?:screen|card|slate)|outro|call[- ]to[- ]action at the end|cta at the end|at the end of (?:the|each|every|your) (?:video|clip)s?"
+    r"|end (?:the|each|every|your) (?:video|clip)s? with|(?:video|clip)s? (?:must|should) end with|ending with)",
+    re.I,
+)
+
+
+def _end_text(t: str) -> tuple[str, int] | None:
+    """The brief asks for text at the end of each video (an end screen or call to action). Returns (text,
+    position); text is "" when the brief mentions it without quoting the words."""
+    m = END_TEXT.search(t)
+    if not m:
+        return None
+    line_end = t.find("\n", m.end())
+    window = t[m.start() : (t.find("\n", line_end + 1) if line_end >= 0 else len(t))]
+    q = re.search(r"[\"“”']([^\"“”\n]{2,110})[\"“”']", window)
+    return (q.group(1).strip() if q else ""), m.start()
+
+
 def parse_brief(text: str) -> tuple[dict, list[str]]:
     """Returns (patch for Brief, list of human-readable 'found' notes).
 
@@ -267,6 +286,19 @@ def parse_brief(text: str) -> tuple[dict, list[str]]:
             src["required_text"] = t[a : b if b >= 0 else len(t)].strip(" \t-•*")[:200]
         found.append("Required caption text: " + (req[0][:60] + ("…" if len(req[0]) > 60 else "")))
     req_low = req[0].lower() if req else ""
+
+    end = _end_text(t)
+    if end:
+        words, at = end
+        if same:
+            a = t.rfind("\n", 0, at) + 1
+            b = t.find("\n", at)
+            src["end_text"] = t[a : b if b >= 0 else len(t)].strip(" \t-•*")[:200]
+        if words:
+            patch["end_text"] = {"enabled": True, "text": words[:120]}
+            found.append(f"End text: {words[:60]}")
+        else:
+            found.append("End screen mentioned: write its text in Requirements")
 
     tags = list(dict.fromkeys(re.findall(r"(?<![\w&])#([A-Za-z]\w{1,59})", t)))
     tags = [x for x in tags if x.lower() not in ("ad", "sponsored", "partner") and f"#{x.lower()}" not in req_low]

@@ -23,6 +23,19 @@ export function overlapsTitle(logo: Logo): boolean {
   return logo.mode === "free" && r[0] < TITLE_AREA[2] && r[2] > TITLE_AREA[0] && r[1] < TITLE_AREA[3] && r[3] > TITLE_AREA[1];
 }
 
+/** Where the end text sits over the last seconds (centred at 45% height). */
+export const END_AREA: Rect = [0.1, 0.4, 0.9, 0.5];
+
+/** How much of a caption band (centre y, height h) the logo rectangle covers (free logos only). */
+export function captionLogoOverlap(logo: Logo, y: number, h: number): number {
+  if (logo.mode !== "free" || !logo.has_file) return 0;
+  const r = logoRect(logo);
+  if (r[2] < 0.2 || r[0] > 0.8) return 0; // captions are centred; a logo at the edge doesn't touch them
+  const a = y - h / 2;
+  const b = y + h / 2;
+  return Math.max(0, Math.min(b, r[3]) - Math.max(a, r[1])) / h;
+}
+
 /** Fraction of the logo under a platform's UI / no-go areas (sampled on a 30x30 grid). */
 export function coverage(logo: Logo, zones: SafeZones | null | undefined, platform: Platform): { ui: number; nogo: number } {
   const z = zones?.[platform];
@@ -52,9 +65,15 @@ export function LogoPlacer({
   zones,
   platform,
   title,
+  end,
+  captions,
   onChange,
 }: {
   title?: boolean;
+  /** show where the end text goes */
+  end?: boolean;
+  /** caption band (centre y and height, fractions); draggable up/down when onChange is given */
+  captions?: { y: number; h: number; onChange?: (y: number) => void };
   campaignId: string;
   version: number;
   logo: Logo;
@@ -63,7 +82,7 @@ export function LogoPlacer({
   onChange: (patch: Partial<Logo>) => void;
 }) {
   const frame = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ mode: "move" | "size"; sx: number; sy: number; x: number; y: number; w: number } | null>(null);
+  const drag = useRef<{ mode: "move" | "size" | "cap"; sx: number; sy: number; x: number; y: number; w: number } | null>(null);
   const [active, setActive] = useState(false);
   const z = zones?.[platform];
   const free = logo.mode === "free";
@@ -87,6 +106,10 @@ export function LogoPlacer({
     if (!d || !f) return;
     const dx = (e.clientX - d.sx) / f.width;
     const dy = (e.clientY - d.sy) / f.height;
+    if (d.mode === "cap") {
+      captions?.onChange?.(Math.round(Math.max(0.1, Math.min(0.92, d.y + dy)) * 100) / 100);
+      return;
+    }
     if (d.mode === "size") {
       onChange({ width: Math.round(Math.max(0.08, Math.min(1, d.w + dx * 2)) * 1000) / 1000 });
     } else {
@@ -123,12 +146,46 @@ export function LogoPlacer({
   return (
     <div className={`lp-frame ${active ? "dragging" : ""}`} ref={frame} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
       <div className="lp-scene" aria-hidden="true" />
-      <div className="lp-cap" aria-hidden="true">
-        YOUR <i>CAPTION</i>
-      </div>
+      {captions ? (
+        <div
+          className={`lp-cap ${captions.onChange ? "movable" : ""}`}
+          style={{ top: `${(captions.y - captions.h / 2) * 100}%`, height: `${captions.h * 100}%` }}
+          role={captions.onChange ? "slider" : undefined}
+          tabIndex={captions.onChange ? 0 : undefined}
+          aria-label={captions.onChange ? "Caption position. Drag up or down, or use the arrow keys." : undefined}
+          aria-valuenow={captions.onChange ? Math.round(captions.y * 100) : undefined}
+          aria-valuemin={captions.onChange ? 10 : undefined}
+          aria-valuemax={captions.onChange ? 92 : undefined}
+          aria-hidden={captions.onChange ? undefined : true}
+          onKeyDown={(e) => {
+            if (!captions.onChange || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+            e.preventDefault();
+            const step = (e.shiftKey ? 0.05 : 0.01) * (e.key === "ArrowUp" ? -1 : 1);
+            captions.onChange(Math.round(Math.max(0.1, Math.min(0.92, captions.y + step)) * 100) / 100);
+          }}
+          onPointerDown={(e) => {
+            if (!captions.onChange) return;
+            e.preventDefault();
+            (e.target as HTMLElement).setPointerCapture(e.pointerId);
+            drag.current = { mode: "cap", sx: e.clientX, sy: e.clientY, x: 0, y: captions.y, w: 0 };
+            setActive(true);
+          }}
+        >
+          <span>
+            YOUR <i>CAPTIONS</i>
+          </span>
+        </div>
+      ) : (
+        <div className="lp-cap" style={{ top: "60%" }} aria-hidden="true">
+          <span>
+            YOUR <i>CAPTION</i>
+          </span>
+        </div>
+      )}
       {z?.ui.map((rect, i) => box(rect, "ui", `ui${i}`, i === 0 ? "app buttons & text" : undefined))}
       {z?.nogo.map((rect, i) => box(rect, "nogo", `ng${i}`))}
       {title && box(TITLE_AREA, "title", "title", "title text (first seconds)")}
+      {end && box(END_AREA, "title", "end", "end text (last seconds)")}
       {logo.mode === "template" && logo.has_file && <img className="lp-template" src={media.logo(campaignId, version)} alt="Brand's logo template" />}
       {free && (
         <div
@@ -160,7 +217,7 @@ export function CoverageStatus({ logo, zones, platforms, title }: { logo: Logo; 
   const clash = title && overlapsTitle(logo) ? (
     <div className="alert warn" style={{ marginTop: 8 }}>
       <Icon name="alert" />
-      <div className="alert-body">The logo overlaps the title text shown in the first seconds (dashed box). Move it, or turn the title text off below.</div>
+      <div className="alert-body">The logo sits where the title text goes (dashed box). The title text moves just below the logo automatically; move the logo if you'd rather keep the title at the top.</div>
     </div>
   ) : null;
   const plats = platforms.length ? platforms : (["reels", "shorts"] as Platform[]);

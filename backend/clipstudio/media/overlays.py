@@ -32,6 +32,18 @@ class HookText:
 
 
 @dataclass
+class EndText:
+    """Text over the last seconds of the video (a call to action or end screen)."""
+
+    text: str
+    duration: float = 2.5
+    y: float = 0.45
+    style: str = "dark"
+    look: str = "overlay"  # overlay: text over the video · card: the video is dimmed and blurred behind it
+    start: float | None = None  # seconds into the video; None = duration before the end
+
+
+@dataclass
 class ProgressBar:
     position: str = "top"  # top | bottom
     color: str = "#FFE600"
@@ -62,8 +74,9 @@ def build_overlay_ass(
     clip_duration: float,
     pov: str | None = None,
     progress: ProgressBar | None = None,
+    end_text: EndText | None = None,
 ) -> str | None:
-    if not (hook and hook.text.strip()) and not (disclosure and disclosure.text.strip()) and not (pov and pov.strip()) and progress is None:
+    if not (hook and hook.text.strip()) and not (disclosure and disclosure.text.strip()) and not (pov and pov.strip()) and progress is None and not (end_text and end_text.text.strip()):
         return None
     pov_px = round(height * 0.036)
     hook_px = round(height * 0.042)
@@ -109,6 +122,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         tag = f"\\pos({width // 2},{round(hook.y * height)})\\fscx70\\fscy70\\t(0,140,\\fscx100\\fscy100)\\fad(0,220)"
         st = hook.style if hook.style in HOOK_STYLES else "box"
         events.append(f"Dialogue: 2,{_ass_time(0.0)},{_ass_time(end)},Hook_{st},,0,0,0,,{{{tag}}}{text}")
+    if end_text and end_text.text.strip():
+        toks = [_escape(w) for w in tidy_hook(end_text.text, 16).upper().split()]
+        max_chars = max(8, int((width * 0.80) / (hook_px * 0.5)))
+        lines = _wrap(toks, 3, max_chars)
+        text = "\\N".join(" ".join(toks[i] for i in line) for line in lines)
+        t0 = end_start(end_text, clip_duration)
+        tag = f"\\pos({width // 2},{round(end_text.y * height)})\\fscx70\\fscy70\\t(0,160,\\fscx100\\fscy100)\\fad(180,0)"
+        st = end_text.style if end_text.style in HOOK_STYLES else "dark"
+        events.append(f"Dialogue: 2,{_ass_time(t0)},{_ass_time(clip_duration + 1)},Hook_{st},,0,0,0,,{{{tag}}}{text}")
     if disclosure and disclosure.text.strip():
         margin_x = round(width * 0.06)
         top = round(height * 0.115)
@@ -124,6 +146,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     if progress is not None:
         events += progress_events(width, height, progress, clip_duration)
     return header + "\n".join(events) + "\n"
+
+
+def end_start(end: EndText, clip_duration: float) -> float:
+    """When the end text appears: its own start, or ``duration`` seconds before the end (never before 0)."""
+    t0 = end.start if end.start is not None else clip_duration - end.duration
+    return max(0.0, t0)
 
 
 def progress_events(width: int, height: int, bar: ProgressBar, duration: float) -> list[str]:

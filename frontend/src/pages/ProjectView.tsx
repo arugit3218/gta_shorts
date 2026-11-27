@@ -45,6 +45,7 @@ export default function ProjectView() {
   const [aiPicks, setAiPicks] = useState(false);
   const [framing, setFraming] = useState<false | "all" | "selected">(false);
   const [recipe, setRecipe] = useState<false | "all" | "selected">(false);
+  const [capPos, setCapPos] = useState(false);
   const [reprocessing, setReprocessing] = useState(false);
   const [help, setHelp] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -449,6 +450,9 @@ export default function ProjectView() {
                     <button className="btn sm" disabled={busy} onClick={() => setRecipe("selected")} title="Apply a saved look to just these clips">
                       <Icon name="zap" /> Apply recipe
                     </button>
+                    <button className="btn sm" disabled={busy} onClick={() => setCapPos(true)} title="Move the captions of just these clips">
+                      <Icon name="type" /> Captions
+                    </button>
                   </>
                 )}
                 {sel.some((c) => c.has_video && c.render_status === "done") && (
@@ -523,11 +527,84 @@ export default function ProjectView() {
       {confirmDelete && <DeleteDialog project={p} postedClips={all.filter((c) => Object.keys(c.posted ?? {}).length > 0).length} onClose={() => setConfirmDelete(false)} onDeleted={() => nav(p.campaign_id ? `/campaigns/${p.campaign_id}` : "/projects")} />}
       {addClip && <AddClipDialog project={p} onClose={() => setAddClip(false)} onDone={() => (clips.reload(), proj.reload())} />}
       {framing && <FramingDialog project={p} selected={framing === "selected" ? sel.map((c) => c.id) : []} onClose={() => setFraming(false)} onDone={() => (clips.reload(), proj.reload())} />}
+      {capPos && <CaptionPositionDialog project={p} clips={sel} onClose={() => setCapPos(false)} onDone={() => (clips.reload(), proj.reload())} />}
       {recipe && <RecipeDialog project={p} selected={recipe === "selected" ? sel.map((c) => c.id) : []} onClose={() => setRecipe(false)} onDone={() => (clips.reload(), proj.reload())} />}
       {aiPicks && <AiPicksDialog project={p} clips={all} onClose={() => setAiPicks(false)} onDone={() => (clips.reload(), proj.reload())} />}
       {reprocessing && <ReprocessDialog project={p} clips={all} onClose={() => setReprocessing(false)} onStart={(keep) => (setReprocessing(false), startNow(keep))} />}
       {help && <ShortcutHelp items={PROJECT_KEYS} onClose={() => setHelp(false)} />}
     </div>
+  );
+}
+
+/** Caption height for the selected clips: automatic (campaign / look, kept clear of the logo) or one height. */
+function CaptionPositionDialog({ project, clips, onClose, onDone }: { project: Project; clips: Clip[]; onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  const first = clips[0]?.features?.text_layout?.caption_position ?? 0.7;
+  const [mode, setMode] = useState<"auto" | "set">("set");
+  const [y, setY] = useState(Math.round(first * 100) / 100);
+  const [busy, setBusy] = useState(false);
+  const rendered = clips.filter((c) => c.has_video).length;
+  const go = async () => {
+    setBusy(true);
+    try {
+      const what = mode === "auto" ? { caption_position_auto: true } : { caption_position: y };
+      // only clips that already have a video re-render; the others pick it up when they're rendered
+      const withVideo = clips.filter((c) => c.has_video).map((c) => c.id);
+      const without = clips.filter((c) => !c.has_video).map((c) => c.id);
+      let updated = 0;
+      let rendering = 0;
+      if (withVideo.length) {
+        const r = await api.bulkClips(project.id, { ids: withVideo, render: true, ...what });
+        updated += r.updated;
+        rendering += r.rendering;
+      }
+      if (without.length) updated += (await api.bulkClips(project.id, { ids: without, render: false, ...what })).updated;
+      toast(updated ? `Captions moved on ${plural(updated, "clip")}${rendering ? `, ${rendering} re-rendering` : ""}` : "Nothing to change: those clips already use this");
+      onDone();
+      onClose();
+    } catch (e) {
+      toast((e as Error).message, "error");
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      title={`Captions for ${plural(clips.length, "selected clip")}`}
+      onClose={onClose}
+      actions={
+        <>
+          <button className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn primary" disabled={busy} onClick={go}>
+            {busy ? <Spinner /> : <Icon name="check" />} Apply{rendered ? " & re-render" : ""}
+          </button>
+        </>
+      }
+    >
+      <div className="stack">
+        <div className="seg">
+          <button className={mode === "set" ? "active" : ""} onClick={() => setMode("set")}>
+            Set the height
+          </button>
+          <button className={mode === "auto" ? "active" : ""} onClick={() => setMode("auto")}>
+            Automatic
+          </button>
+        </div>
+        {mode === "set" ? (
+          <div className="field">
+            <label htmlFor="bulk-cap">Captions {Math.round(y * 100)}% from the top</label>
+            <input id="bulk-cap" type="range" min={0.1} max={0.92} step={0.01} value={y} onChange={(e) => setY(+e.target.value)} />
+            <span className="hint">Around 60–75% is usual. Higher numbers sit lower on the screen; the very bottom is covered by the app's caption and buttons.</span>
+          </div>
+        ) : (
+          <p className="small muted" style={{ margin: 0 }}>
+            Back to the campaign's caption position (or the caption look's own), moved clear of the logo when they'd overlap.
+          </p>
+        )}
+        {rendered > 0 && <span className="small muted">{plural(rendered, "rendered clip")} will re-render with the new position.</span>}
+      </div>
+    </Modal>
   );
 }
 

@@ -1,5 +1,24 @@
 # Development log
 
+## Round 4 from user feedback (2026-11-27)
+
+- **#4 Same link added twice.** Create → Clips now lists the chosen campaign's videos *above* the upload/link box (Open, Start, Re-process). Links are matched with `download.same_video_key()`, so youtu.be, watch?v= with `si`/`t`, /shorts and /live count as one video.
+    - `inspect-url` returns `existing_projects`.
+    - `POST /projects/bulk` skips links already in the same campaign (`existing` in the response).
+    - `POST /projects` refuses a same-campaign duplicate unless `allow_duplicate`.
+    - The Configure step shows "Already in …" with Open / Re-process and a "Make a second copy anyway" tick that the Start button waits for.
+    - The campaign page highlights newly added videos and scrolls to them.
+- **#3 Captions vs logo.**
+    - New `Brief.caption_position`, plus `campaigns/text_layout.py`: captions, title text and end text move to the nearest spot clear of the logo's pixels. A caption position set on the clip itself is kept as is.
+    - `features.text_layout` reports the result. A new compliance check, "Captions clear of the logo", warns above 0% and fails above 25%.
+    - UI: a "Text on the video" card on Requirements (caption position, title text moved here, end text), and a draggable captions band on the logo placer. In the editor, the caption position shows "automatic (why)" with an Automatic reset. On the video page, the selection bar has **Captions** (set a height or go back to automatic for the selected clips).
+    - The bulk endpoint skips clips that wouldn't change.
+- **#2 End text.**
+    - `Brief.end_text` and clip `edit.end_text` (partial, merged): text with `{title}`, 1–6 s, hook styles, and look `overlay` or `card` (dimmed and blurred video, captions stop). The clip keeps its length.
+    - Brief reader: "end screen / end card / end each video with / at the end of every clip" (quoted words). Summary item, compliance check `end_text`, montages locked.
+- **Videos kept when changing requirements first.** In the campaign's "Make clips from…" box, "Change requirements first" now adds the links/files to the campaign as *not started* (`POST /projects/bulk` with `start: false`, uploads without `process`) and opens Requirements. Add videos shows "N videos added, not started yet" with **Start making clips** (same confirmation box, current campaign settings). Not-started videos also show in Create → Clips under "Already in …".
+- Tests: `tests/test_text_layout.py` (8, written and run once before the user asked to stop testing). A clash between the title-text and end-text variables in `build_overlay_ass` was found by a demo render and fixed; the end-to-end demo render after that fix was not run.
+
 ## Mark as posted + campaign Post queue (2026-11-26)
 
 - **Data:** new `posts` table (clip_id, platform, url, posted_at; cascades with the clip). Helpers in `campaigns/posting.py`. A clip is *done* when posted on every platform in `brief.platforms` (both without a campaign).

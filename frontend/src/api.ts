@@ -14,6 +14,7 @@ import type {
   ClipEdit,
   ClipWords,
   Dashboard,
+  ExistingVideo,
   Job,
   Layout,
   StreamLayout,
@@ -88,15 +89,17 @@ export const api = {
   projects: () => req<Project[]>("GET", "/projects"),
   project: (id: string) => req<Project>("GET", `/projects/${id}`),
   inspectUrl: (url: string) => req<UrlInfo>("POST", "/sources/inspect-url", { url }),
-  createUrlProject: (url: string, options: ProcessOptions, name?: string, campaign_id?: string | null) => req<Project>("POST", "/projects", { url, options, name, start: true, campaign_id: campaign_id || null }),
-  createBulk: (urls: string[], options: ProcessOptions, campaign_id?: string | null) =>
-    req<{ created: Project[]; errors: { url: string; error: string }[] }>("POST", "/projects/bulk", { urls, options, campaign_id: campaign_id || null }),
+  createUrlProject: (url: string, options: ProcessOptions, name?: string, campaign_id?: string | null, allow_duplicate = false) =>
+    req<Project>("POST", "/projects", { url, options, name, start: true, campaign_id: campaign_id || null, allow_duplicate }),
+  /** Links already in this campaign come back under `existing` instead of being added twice. */
+  createBulk: (urls: string[], options: ProcessOptions, campaign_id?: string | null, start = true) =>
+    req<{ created: Project[]; errors: { url: string; error: string }[]; existing: { url: string; project: ExistingVideo }[] }>("POST", "/projects/bulk", { urls, options, campaign_id: campaign_id || null, start }),
   uploadProject: (file: File, onProgress?: (p: number) => void, signal?: AbortSignal, campaign_id?: string | null) =>
     uploadRaw<Project>(`/projects/upload?filename=${encodeURIComponent(file.name)}${campaign_id ? `&campaign_id=${campaign_id}` : ""}`, file, onProgress, signal),
   importPath: (path: string, campaign_id?: string | null) => req<Project>("POST", "/projects/import-path", { path, campaign_id: campaign_id || null }),
   patchProject: (id: string, patch: { name?: string; campaign_id?: string; stream_layout?: StreamLayout; clear_stream_layout?: boolean }) => req<Project>("PATCH", `/projects/${id}`, patch),
   detectFacecam: (id: string) => req<{ cam: [number, number, number, number] | null; samples: number; found: boolean }>("POST", `/projects/${id}/detect-facecam`),
-  bulkClips: (id: string, body: { layout?: Layout; aspect_ratio?: string; output_height?: 720 | 1080; scope?: "all" | "approved" | "unrejected"; ids?: string[]; render?: boolean; recipe_id?: string }) =>
+  bulkClips: (id: string, body: { layout?: Layout; aspect_ratio?: string; output_height?: 720 | 1080; scope?: "all" | "approved" | "unrejected"; ids?: string[]; render?: boolean; recipe_id?: string; caption_position?: number; caption_position_auto?: boolean }) =>
     req<{ updated: number; rendering: number }>("POST", `/projects/${id}/clips/bulk`, body),
   addClip: (id: string, body: { start: number; end: number; title?: string; render?: boolean }) => req<Clip>("POST", `/projects/${id}/clips`, body),
   aiPrompt: (id: string) => req<{ prompt: string; chars: number; sentences: number }>("GET", `/projects/${id}/ai-prompt`),

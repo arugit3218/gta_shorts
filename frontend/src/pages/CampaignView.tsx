@@ -3,10 +3,10 @@ import { Link, useBlocker, useNavigate, useParams, useSearchParams } from "react
 import { api, media } from "../api";
 import { LinesEditor, ListEditor, TYPE_LABEL, useSafeZones } from "../components/campaign";
 import { HelpTip } from "../components/help";
-import { HOOK_TEMPLATES } from "../components/polish";
+import { HOOK_TEMPLATES, HookStylePicker } from "../components/polish";
 import { PostQueue, PostedBadge } from "../components/posting";
 import { Icon } from "../components/Icon";
-import { CoverageStatus, LogoPlacer } from "../components/logoPlacer";
+import { CoverageStatus, LogoPlacer, captionLogoOverlap } from "../components/logoPlacer";
 import { LAYOUT_OPTIONS } from "../components/framing";
 import { IntensityPicker, MiniPhone, StylePicker, campaignOptions, describeStyle, styleOf, type Intensity, type StyleKey } from "../components/styles";
 import { Alert, Bar, Modal, Spinner, StatusBadge, attempt, plural, useDialogs, useToast } from "../components/ui";
@@ -25,7 +25,7 @@ const TABS: [Tab, string][] = [
 const num = (v: string): number | null => (v.trim() === "" ? null : Number(v));
 
 type SetFn = <K extends keyof Brief>(k: K, v: Brief[K]) => void;
-type SetSubFn = <K extends "logo" | "sound_rule" | "disclosure" | "hook_overlay">(k: K, patch: Partial<Brief[K]>) => void;
+type SetSubFn = <K extends "logo" | "sound_rule" | "disclosure" | "hook_overlay" | "end_text">(k: K, patch: Partial<Brief[K]>) => void;
 
 export default function CampaignView() {
   const { id = "" } = useParams();
@@ -259,6 +259,18 @@ function OverviewTab({ camp, b, onServer, goTab, dirty, onSave }: { camp: Campai
   const saved = camp.brief;
   const [clipInstead, setClipInstead] = useState(false);
   const music = b.type === "music";
+  // videos just added: highlighted in the list for a few seconds, which is scrolled into view
+  const [fresh, setFresh] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (!fresh.size) return;
+    const t = setTimeout(() => setFresh(new Set()), 6000);
+    return () => clearTimeout(t);
+  }, [fresh]);
+  const added = (ids: string[]) => {
+    if (!ids.length) return;
+    setFresh(new Set(ids));
+    setTimeout(() => document.getElementById("campaign-videos")?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+  };
   const steps: { done: boolean; label: string; tab?: Tab; action?: string }[] = [
     { done: !!saved.raw_brief, label: "Brief read", tab: "brief", action: "Paste it" },
   ];
@@ -294,9 +306,9 @@ function OverviewTab({ camp, b, onServer, goTab, dirty, onSave }: { camp: Campai
             </div>
           </section>
         ) : (
-          <AddVideos camp={camp} onServer={onServer} goTab={goTab} dirty={dirty} onSave={onSave} />
+          <AddVideos camp={camp} onServer={onServer} goTab={goTab} dirty={dirty} onSave={onSave} onAdded={added} />
         )}
-        <section className="card">
+        <section className="card" id="campaign-videos">
           <div className="card-head">
             <h2>Videos</h2>
             <span className="small muted">{list.length}</span>
@@ -310,7 +322,7 @@ function OverviewTab({ camp, b, onServer, goTab, dirty, onSave }: { camp: Campai
               list.map((p) => {
                 const working = p.status === "processing" || p.status === "queued";
                 return (
-                  <div className="video-row" key={p.id}>
+                  <div className={`video-row ${fresh.has(p.id) ? "fresh" : ""}`} key={p.id}>
                     <div className="vr-thumb">{p.thumb_clip_id ? <img src={media.thumb({ id: p.thumb_clip_id, version: Math.round(p.updated_at) })} alt="" /> : <Icon name={p.source_type === "montage" ? "music" : "film"} />}</div>
                     <div style={{ minWidth: 0 }}>
                       <b className="ellipsis" style={{ display: "block" }}>
@@ -527,7 +539,7 @@ function OutdatedBar({ camp, onServer }: { camp: Campaign; onServer: (c: Campaig
   );
 }
 
-function AddVideos({ camp, onServer, goTab, dirty, onSave }: { camp: Campaign; onServer: (c: Campaign) => void; goTab: (t: Tab) => void; dirty: boolean; onSave: () => Promise<boolean> }) {
+function AddVideos({ camp, onServer, goTab, dirty, onSave, onAdded }: { camp: Campaign; onServer: (c: Campaign) => void; goTab: (t: Tab) => void; dirty: boolean; onSave: () => Promise<boolean>; onAdded: (ids: string[]) => void }) {
   const toast = useToast();
   const settings = usePoll(api.settings, []).data;
   const [mode, setMode] = useState<"upload" | "links">("upload");
@@ -536,7 +548,8 @@ function AddVideos({ camp, onServer, goTab, dirty, onSave }: { camp: Campaign; o
   const [over, setOver] = useState(false);
   const [styleOpen, setStyleOpen] = useState(false);
   // videos wait here until the user confirms the settings they'll be made with
-  const [pending, setPending] = useState<{ files?: File[]; urls?: string[] } | null>(null);
+  // projects = videos already in the campaign but not started (added before the requirements were ready)
+  const [pending, setPending] = useState<{ files?: File[]; urls?: string[]; projects?: string[] } | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const saved = camp.brief;
   const st = styleOf(saved.style || null);
@@ -550,36 +563,65 @@ function AddVideos({ camp, onServer, goTab, dirty, onSave }: { camp: Campaign; o
   const ensureStyle = async () => {
     if (!saved.style) onServer(await api.patchCampaign(camp.id, { brief: { style: st.key } }));
   };
-  const upload = async (files: FileList | File[]) => {
+  const notStarted = (camp.project_list ?? []).filter((p) => p.stage === "not_started" && p.source_type !== "montage");
+  /** start videos already added to the campaign (not started yet) with its settings as they are now */
+  const startExisting = async (ids: string[]) => {
+    await ensureStyle();
+    setBusy(`Starting ${plural(ids.length, "video")}…`);
+    const ok: string[] = [];
+    for (const id of ids) {
+      try {
+        await api.process(id, options());
+        ok.push(id);
+      } catch (e) {
+        toast((e as Error).message, "error");
+      }
+    }
+    setBusy(null);
+    if (ok.length) toast(`${plural(ok.length, "video")} started. Finding clips now: see Videos below.`);
+    onServer(await api.campaign(camp.id));
+    onAdded(ok);
+  };
+  /** ``start`` false: add the videos to the campaign without processing them yet */
+  const upload = async (files: FileList | File[], start = true) => {
     const all = Array.from(files); // copy now: clearing the input empties the live FileList
     await ensureStyle();
     let ok = 0;
+    const ids: string[] = [];
     for (let i = 0; i < all.length; i++) {
       setBusy(all.length > 1 ? `Uploading ${i + 1} of ${all.length}: ${all[i].name}` : `Uploading ${all[i].name}`);
       try {
         const label = all.length > 1 ? `Uploading ${i + 1} of ${all.length}: ${all[i].name}` : `Uploading ${all[i].name}`;
         const p = await api.uploadProject(all[i], (f) => setBusy(`${label} · ${Math.round(f * 100)}%`), undefined, camp.id);
-        await api.process(p.id, options());
+        if (start) await api.process(p.id, options());
+        ids.push(p.id);
         ok++;
       } catch (e) {
         toast(`${all[i].name}: ${(e as Error).message}`, "error");
       }
     }
     setBusy(null);
-    if (ok) toast(`${plural(ok, "video")} added. Finding clips…`);
+    if (ok) toast(start ? `${plural(ok, "video")} added. Finding clips now: see Videos below.` : `${plural(ok, "video")} added, not started yet. Start them from Overview once the requirements look right.`);
     onServer(await api.campaign(camp.id));
+    if (start) onAdded(ids);
+    return ok;
   };
-  const addLinks = async (urls: string[]) => {
+  const addLinks = async (urls: string[], start = true) => {
     await ensureStyle();
     setBusy(`Adding ${plural(urls.length, "link")}…`);
     try {
-      const r = await api.createBulk(urls, options(), camp.id);
+      const r = await api.createBulk(urls, options(), camp.id, start);
       if (r.errors.length) toast(`${r.errors.length} link(s) skipped: ${r.errors[0].error}`, "error");
-      if (r.created.length) toast(`${plural(r.created.length, "link")} added. Downloading and finding clips…`);
+      if (r.existing.length) toast(`${plural(r.existing.length, "link")} already in this campaign (“${r.existing[0].project.name}”), so not added again`);
+      if (r.created.length)
+        toast(start ? `${plural(r.created.length, "link")} added. Downloading and finding clips now: see Videos below.` : `${plural(r.created.length, "link")} added, not started yet. Start them from Overview once the requirements look right.`);
       setLinks("");
       onServer(await api.campaign(camp.id));
+      if (start) onAdded([...r.created.map((p) => p.id), ...r.existing.map((e) => e.project.id)]);
+      return r.created.length + r.existing.length;
     } catch (e) {
       toast((e as Error).message, "error");
+      return 0;
     } finally {
       setBusy(null);
     }
@@ -592,6 +634,21 @@ function AddVideos({ camp, onServer, goTab, dirty, onSave }: { camp: Campaign; o
         <span className="small muted">Clips are made with this campaign's requirements and style</span>
       </div>
       <div className="card-body stack">
+        {notStarted.length > 0 && !busy && (
+          <div className="alert info not-started-bar">
+            <Icon name="clock" />
+            <div className="alert-body row between wrap" style={{ gap: 10 }}>
+              <span>
+                <b>{plural(notStarted.length, "video")} added, not started yet</b>
+                <br />
+                <span className="small">{notStarted.slice(0, 3).map((p) => p.name).join(", ")}{notStarted.length > 3 ? ` and ${notStarted.length - 3} more` : ""}. Start when the requirements look right.</span>
+              </span>
+              <button className="btn sm primary" onClick={() => setPending({ projects: notStarted.map((p) => p.id) })}>
+                <Icon name="zap" /> Start making clips
+              </button>
+            </div>
+          </div>
+        )}
         <div className="seg" role="tablist">
           <button role="tab" aria-selected={mode === "upload"} className={mode === "upload" ? "active" : ""} onClick={() => setMode("upload")}>
             <Icon name="upload" size={13} /> Upload files
@@ -679,23 +736,28 @@ function AddVideos({ camp, onServer, goTab, dirty, onSave }: { camp: Campaign; o
       {pending && !styleOpen && (
         <StartDialog
           camp={camp}
-          count={pending.files?.length ?? pending.urls?.length ?? 0}
-          kind={pending.files ? "file" : "link"}
+          count={pending.files?.length ?? pending.urls?.length ?? pending.projects?.length ?? 0}
+          kind={pending.urls ? "link" : "file"}
+          added={!!pending.projects}
           summary={[
             ["Clip length", saved.min_duration || saved.max_duration ? `${saved.min_duration ?? "any"}–${saved.max_duration ?? "any"} seconds (campaign)` : `${settings?.duration_preset ?? "15-30"} seconds (your default in Settings)`],
             ["Clips per video", `up to ${maxClips}, weak moments skipped`],
             ["Style", `${st.label} · ${(saved.intensity || st.intensity)} editing`],
             ["Framing", framingLabel],
-            ["Captions", captionLabel],
+            ["Captions", `${captionLabel}${saved.caption_position != null ? ` · ${Math.round(saved.caption_position * 100)}% down` : ""}${saved.logo.mode !== "none" ? ", kept clear of the logo" : ""}`],
+            ["End text", saved.end_text.enabled && saved.end_text.text.trim() ? `“${saved.end_text.text}” for the last ${saved.end_text.duration}s` : "off"],
             ["Title text", saved.type === "music" || !saved.hook_overlay.enabled ? "off" : saved.hook_overlay.text ? `“${saved.hook_overlay.text}” on every clip` : "written for each clip"],
             ["Logo", saved.logo.mode === "none" ? "none" : saved.logo.has_file ? (saved.logo.mode === "template" ? "brand's template file" : "placed as set on Requirements") : "missing"],
             ["Caption", [saved.disclosure.in_caption && saved.disclosure.text, saved.required_caption_text && "required text"].filter(Boolean).join(" + ") || "hook + hashtags"],
           ]}
           onCancel={() => setPending(null)}
-          onChange={(t) => {
+          onChange={async (t) => {
             if (t === "style") return setStyleOpen(true); // the picked videos wait; this box comes back after
+            const p = pending;
             setPending(null);
-            toast("Videos not added yet. Add them again once the requirements look right.");
+            // keep the videos: add them to the campaign (not started), then open the requirements
+            if (p.files) await upload(p.files, false);
+            else if (p.urls) await addLinks(p.urls, false);
             goTab(t);
           }}
           dirty={dirty}
@@ -705,6 +767,7 @@ function AddVideos({ camp, onServer, goTab, dirty, onSave }: { camp: Campaign; o
             setPending(null);
             if (p.files) upload(p.files);
             else if (p.urls) addLinks(p.urls);
+            else if (p.projects) startExisting(p.projects);
           }}
         />
       )}
@@ -717,6 +780,7 @@ function StartDialog({
   camp,
   count,
   kind,
+  added,
   summary,
   onCancel,
   onChange,
@@ -725,6 +789,8 @@ function StartDialog({
   camp: Campaign;
   count: number;
   kind: "file" | "link";
+  /** the videos are already in the campaign (not started) */
+  added?: boolean;
   summary: [string, string][];
   onCancel: () => void;
   onChange: (t: Tab | "style") => void;
@@ -744,8 +810,8 @@ function StartDialog({
           <button className="btn" onClick={onCancel}>
             Cancel
           </button>
-          <button className="btn" onClick={() => onChange("requirements")}>
-            Change requirements
+          <button className="btn" onClick={() => onChange("requirements")} title={added ? "The videos stay in the campaign, not started" : "The videos are added to the campaign now (not started) and you can start them after"}>
+            Change requirements first
           </button>
           <button className="btn primary" onClick={onStart}>
             <Icon name="zap" /> Start making clips
@@ -760,7 +826,8 @@ function StartDialog({
       )}
       {dirty && <Alert kind="info">You have unsaved changes on this campaign. They'll be saved first, so these videos use them.</Alert>}
       <p className="small muted" style={{ margin: 0 }}>
-        They'll be made with this campaign's settings. Videos are processed one after another{kind === "link" ? ", after downloading" : ""}.
+        They'll be made with this campaign's settings. Videos are processed one after another{kind === "link" ? ", after downloading" : ""}. Want to change the requirements first? The
+        videos are kept in the campaign, not started, until you start them.
       </p>
       <dl className="kv start-kv">
         {summary.map(([k, v]) => (
@@ -879,12 +946,29 @@ function RequirementsTab({ camp, b, set, setSub, onServer }: { camp: Campaign; b
   const [plat, setPlat] = useState<Platform>(b.platforms[0] ?? "reels");
   const togglePlat = (p: Platform) => set("platforms", b.platforms.includes(p) ? b.platforms.filter((x) => x !== p) : [...b.platforms, p]);
   const extrasAllowed = b.allow_music && b.allow_sfx;
+  const music = b.type === "music";
+  // the caption band shown on the phone: the campaign's position, or the caption look's own spot
+  const presets = usePoll(api.captionPresets, []).data;
+  const look = presets?.[b.caption_preset || styleOf(b.style || null).caption_preset];
+  const capH = look ? look.max_lines * look.size * 1.2 + 2 * look.outline : 0.12;
+  const lookY = look?.position ?? 0.7;
+  const capY = b.caption_position ?? lookY;
   return (
     <div className="req-grid">
       <div className="stack req-preview">
-        {b.logo.mode !== "none" ? (
+        {b.logo.mode !== "none" || !music ? (
           <>
-            <LogoPlacer campaignId={camp.id} version={camp.updated_at} logo={b.logo} zones={zones} platform={plat} title={b.hook_overlay.enabled && b.type !== "music"} onChange={(p) => setSub("logo", p)} />
+            <LogoPlacer
+              campaignId={camp.id}
+              version={camp.updated_at}
+              logo={b.logo}
+              zones={zones}
+              platform={plat}
+              title={b.hook_overlay.enabled && !music}
+              end={b.end_text.enabled && !!b.end_text.text.trim() && !music}
+              captions={music ? undefined : { y: capY, h: capH, onChange: (y) => set("caption_position", y) }}
+              onChange={(p) => setSub("logo", p)}
+            />
             <div className="seg" style={{ alignSelf: "center" }} role="tablist" aria-label="Show the buttons of">
               {(["reels", "shorts"] as const).map((p) => (
                 <button key={p} role="tab" aria-selected={plat === p} className={plat === p ? "active" : ""} onClick={() => setPlat(p)}>
@@ -899,12 +983,16 @@ function RequirementsTab({ camp, b, set, setSub, onServer }: { camp: Campaign; b
               <span>
                 <i className="lg-nogo" /> Always covered
               </span>
-              {b.hook_overlay.enabled && b.type !== "music" && (
+              {b.hook_overlay.enabled && !music && (
                 <span>
-                  <i className="lg-title" /> Title text
+                  <i className="lg-title" /> Title / end text
                 </span>
               )}
             </div>
+            {!music && captionLogoOverlap(b.logo, capY, capH) > 0 && (
+              <Alert kind="info">The logo sits where the captions go. On every clip the captions move just above or below the logo automatically, or drag the captions band yourself.</Alert>
+            )}
+            {b.logo.mode === "none" && <span className="small muted" style={{ textAlign: "center" }}>No logo in this campaign. Drag the captions band to set where captions sit.</span>}
           </>
         ) : (
           <div className="card card-body small muted">No logo in this campaign. Choose a logo option on the right if the brand wants one.</div>
@@ -930,6 +1018,7 @@ function RequirementsTab({ camp, b, set, setSub, onServer }: { camp: Campaign; b
             <span className="explain">Clips are found and cut to fit. Leave empty for no limit.</span>
           </div>
         </section>
+        {!music && <TextOnVideoCard b={b} set={set} setSub={setSub} lookY={lookY} />}
         <SoundCard camp={camp} b={b} set={set} setSub={setSub} onServer={onServer} />
         <section className="card">
           <div className="card-head">
@@ -953,25 +1042,6 @@ function RequirementsTab({ camp, b, set, setSub, onServer }: { camp: Campaign; b
                 {b.allow_music !== b.allow_sfx && <span className="badge" style={{ alignSelf: "center", margin: "0 6px" }}>{b.allow_music ? "music only" : "effects only"}</span>}
               </div>
             </div>
-            {b.type !== "music" && (
-              <div className="q-row">
-                <div className="q">
-                  <b>
-                    Title text for the first few seconds? <HelpTip topic="hook_title" />
-                  </b>
-                  <span>A short hook like “Nobody expected this” at the top. Helps people keep watching.</span>
-                </div>
-                <div className="seg">
-                  <button className={b.hook_overlay.enabled ? "active" : ""} onClick={() => setSub("hook_overlay", { enabled: true })}>
-                    Yes
-                  </button>
-                  <button className={!b.hook_overlay.enabled ? "active" : ""} onClick={() => setSub("hook_overlay", { enabled: false })}>
-                    No
-                  </button>
-                </div>
-              </div>
-            )}
-            {b.type !== "music" && b.hook_overlay.enabled && <TitleTextChoice b={b} setSub={setSub} />}
             <div className="q-row">
               <div className="q">
                 <b>
@@ -1021,12 +1091,6 @@ function RequirementsTab({ camp, b, set, setSub, onServer }: { camp: Campaign; b
                 </select>
               </div>
             )}
-            {b.hook_overlay.enabled && (
-              <div className="field">
-                <label>Title text shows for {b.hook_overlay.duration}s</label>
-                <input type="range" min={1.5} max={8} step={0.5} value={b.hook_overlay.duration} onChange={(e) => setSub("hook_overlay", { duration: +e.target.value })} />
-              </div>
-            )}
             {b.logo.mode !== "none" && (
               <div className="grid cols-2">
                 <div className="field">
@@ -1043,6 +1107,123 @@ function RequirementsTab({ camp, b, set, setSub, onServer }: { camp: Campaign; b
         </details>
       </div>
     </div>
+  );
+}
+
+const END_TEMPLATES = ["Follow for part 2", "Link in bio", "Watch the full stream", "Download now"];
+
+/** Captions position, title text and end text: everything written on the video, in one place. */
+function TextOnVideoCard({ b, set, setSub, lookY }: { b: Brief; set: SetFn; setSub: SetSubFn; lookY: number }) {
+  const custom = b.caption_position != null;
+  const e = b.end_text;
+  return (
+    <section className="card">
+      <div className="card-head">
+        <h2>Text on the video</h2>
+        <span className="small muted">captions, title text, end text</span>
+      </div>
+      <div className="card-body tight">
+        <div className="q-row">
+          <div className="q">
+            <b>Where do captions go?</b>
+            <span>
+              {custom ? `${Math.round((b.caption_position ?? 0) * 100)}% down the screen on every clip. Drag the band on the phone, or use the slider.` : `The caption look's own spot (${Math.round(lookY * 100)}% down).`}{" "}
+              {b.logo.mode !== "none" ? "If the logo is in the way, they move just above or below it." : ""}
+            </span>
+          </div>
+          <div className="seg">
+            <button className={!custom ? "active" : ""} onClick={() => set("caption_position", null)}>
+              Automatic
+            </button>
+            <button className={custom ? "active" : ""} onClick={() => set("caption_position", custom ? b.caption_position : lookY)}>
+              Choose
+            </button>
+          </div>
+        </div>
+        {custom && (
+          <div className="field" style={{ padding: "0 0 12px" }}>
+            <label htmlFor="cap-pos">Captions: {Math.round((b.caption_position ?? 0) * 100)}% from the top</label>
+            <input id="cap-pos" type="range" min={0.1} max={0.92} step={0.01} value={b.caption_position ?? lookY} onChange={(ev) => set("caption_position", +ev.target.value)} />
+            <span className="hint">A clip's own position (set in the editor) still wins for that clip.</span>
+          </div>
+        )}
+        <div className="q-row">
+          <div className="q">
+            <b>
+              Title text for the first few seconds? <HelpTip topic="hook_title" />
+            </b>
+            <span>A short hook like “Nobody expected this” at the top. Helps people keep watching.</span>
+          </div>
+          <div className="seg">
+            <button className={b.hook_overlay.enabled ? "active" : ""} onClick={() => setSub("hook_overlay", { enabled: true })}>
+              Yes
+            </button>
+            <button className={!b.hook_overlay.enabled ? "active" : ""} onClick={() => setSub("hook_overlay", { enabled: false })}>
+              No
+            </button>
+          </div>
+        </div>
+        {b.hook_overlay.enabled && (
+          <>
+            <TitleTextChoice b={b} setSub={setSub} />
+            <div className="field" style={{ paddingBottom: 12 }}>
+              <label htmlFor="hook-dur">Title text shows for {b.hook_overlay.duration}s</label>
+              <input id="hook-dur" type="range" min={1.5} max={8} step={0.5} value={b.hook_overlay.duration} onChange={(ev) => setSub("hook_overlay", { duration: +ev.target.value })} />
+            </div>
+          </>
+        )}
+        <div className="q-row">
+          <div className="q">
+            <b>Text at the end of every clip?</b>
+            <span>A call to action or the brand's end screen, e.g. “Follow for part 2”, for the last few seconds.</span>
+          </div>
+          <div className="seg">
+            <button className={e.enabled ? "active" : ""} onClick={() => setSub("end_text", { enabled: true, text: e.text || "Follow for part 2" })}>
+              Yes
+            </button>
+            <button className={!e.enabled ? "active" : ""} onClick={() => setSub("end_text", { enabled: false })}>
+              No
+            </button>
+          </div>
+        </div>
+        {e.enabled && (
+          <div className="stack sm" style={{ paddingBottom: 14 }}>
+            <input className="input" value={e.text} maxLength={120} aria-label="End text" placeholder="e.g. Follow for part 2" onChange={(ev) => setSub("end_text", { text: ev.target.value })} />
+            <div className="row wrap" style={{ gap: 6 }}>
+              {END_TEMPLATES.map((t) => (
+                <button key={t} type="button" className={`chip-btn ${e.text === t ? "on" : ""}`} onClick={() => setSub("end_text", { text: t })}>
+                  {t}
+                </button>
+              ))}
+            </div>
+            <span className="hint">{"{title}"} is replaced with each clip's title. Every clip is checked for it before posting.</span>
+            {!e.text.trim() && <Alert kind="warn">Write the end text, or it won't appear on any clip.</Alert>}
+            <div className="grid cols-2">
+              <div className="field">
+                <label htmlFor="end-dur">Shows for the last {e.duration}s</label>
+                <input id="end-dur" type="range" min={1} max={6} step={0.5} value={e.duration} onChange={(ev) => setSub("end_text", { duration: +ev.target.value })} />
+              </div>
+              <div className="field">
+                <span className="label-text">Look</span>
+                <div className="seg">
+                  <button className={e.look === "overlay" ? "active" : ""} onClick={() => setSub("end_text", { look: "overlay" })} title="Text over the video">
+                    Over the video
+                  </button>
+                  <button className={e.look === "card" ? "active" : ""} onClick={() => setSub("end_text", { look: "card" })} title="The video is dimmed and blurred behind the text, and captions stop">
+                    End card
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="field">
+              <span className="label-text">Style</span>
+              <HookStylePicker value={e.style} onChange={(v) => setSub("end_text", { style: v })} />
+            </div>
+            <span className="hint">The clip keeps its length: the text covers its last seconds{e.look === "card" ? ", over a dimmed, blurred frame" : ""}.</span>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 

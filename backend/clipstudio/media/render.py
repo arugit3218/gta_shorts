@@ -32,7 +32,7 @@ from . import ffmpeg as ff
 from .burned_text import TextBand, TextCollector, blur_filter, detect_burned_text
 from .captions import CapWord, CaptionStyle, build_ass
 from .logo import logo_filter, logo_input_args
-from .overlays import DisclosureText, HookText, ProgressBar, build_overlay_ass
+from .overlays import DisclosureText, EndText, HookText, ProgressBar, build_overlay_ass, end_start
 from .polish import (
     ZOOM,
     Timeline,
@@ -109,6 +109,7 @@ class RenderSpec:
     sfx_on_cuts: bool = False
     # overlays
     hook: HookText | None = None
+    end_text: EndText | None = None  # text over the last seconds (call to action / end screen)
     disclosure: DisclosureText | None = None
     logo: dict | None = None  # campaign LogoSpec as a dict (with a stored file path)
     blur_burned: str = "off"  # auto | off
@@ -377,8 +378,17 @@ def build_video_graph(
             f"[z0][zz]overlay=0:0:enable='{enable_expr(post.zooms)}'[vz]"
         )
         cur = "vz"
-    if spec.captions and post.words and spec.style is not None:
-        (workdir / "subs.ass").write_text(build_ass(post.words, spec.style, width=w, height=h, emphasis=post.emphasis), encoding="utf-8")
+    end = spec.end_text if spec.end_text is not None and spec.end_text.text.strip() else None
+    card_at = end_start(end, post.duration) if end is not None and end.look == "card" else None
+    words = post.words
+    if card_at is not None:
+        # end card: the video is dimmed and softened behind the text, and captions stop there
+        on = f"enable='gte(t,{card_at:.3f})'"
+        chains.append(f"[{cur}]boxblur=12:2:{on},drawbox=x=0:y=0:w=iw:h=ih:color=black@0.5:t=fill:{on}[vk]")
+        cur = "vk"
+        words = [x for x in words if x.s < card_at]
+    if spec.captions and words and spec.style is not None:
+        (workdir / "subs.ass").write_text(build_ass(words, spec.style, width=w, height=h, emphasis=post.emphasis), encoding="utf-8")
         chains.append(f"[{cur}]{_ass_filter('subs.ass', workdir)}[vc]")
         cur = "vc"
     if post.emoji and spec.style is not None:
@@ -392,7 +402,7 @@ def build_video_graph(
         # put the hook title on the seam between webcam and gameplay
         seam = float(stream.get("cam_height", 0.38))
         hook = HookText(hook.text, hook.duration, seam if stream.get("cam_top", True) else 1 - seam, hook.style)
-    overlay = build_overlay_ass(w, h, hook=hook, disclosure=spec.disclosure, clip_duration=post.duration, progress=post.progress)
+    overlay = build_overlay_ass(w, h, hook=hook, disclosure=spec.disclosure, clip_duration=post.duration, progress=post.progress, end_text=end)
     if overlay:
         (workdir / "overlay.ass").write_text(overlay, encoding="utf-8")
         chains.append(f"[{cur}]{_ass_filter('overlay.ass', workdir)}[vo]")
@@ -641,6 +651,9 @@ def render_preview_frame(spec: RenderSpec, t: float, out_jpg: Path) -> Path:
         sub.segments = None
         if sub.hook:
             sub.hook = HookText(sub.hook.text, max(0.0, sub.hook.duration - t), sub.hook.y, sub.hook.style)
+        if sub.end_text:  # keep it starting where it would in the full clip
+            e = sub.end_text
+            sub.end_text = EndText(e.text, e.duration, e.y, e.style, e.look, end_start(e, spec.duration) - t)
         if spec.progress in ("top", "bottom") and spec.duration > 0:
             a, b = spec.progress_span
             sub.progress_span = (a + (b - a) * t / spec.duration, a + (b - a) * min(1.0, (t + 1) / spec.duration))

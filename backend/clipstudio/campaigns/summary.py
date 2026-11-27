@@ -47,6 +47,12 @@ def summarise_brief(b: Brief, sources: dict[str, str] | None = None) -> dict:
         t = b.required_caption_text.strip()
         add("required_text", "Required caption text, exactly as written", f"“{t[:90]}{'…' if len(t) > 90 else ''}” Every caption is checked for it.")
 
+    et = b.end_text
+    if et.enabled and et.text.strip():
+        add("end_text", f"Ends with “{et.text.strip()[:60]}”", f"Shown for the last {et.duration:g} seconds of every clip.")
+    elif "end_text" in src:
+        add("end_text", "An end screen is asked for", "The brief mentions it but not its exact words.", todo="Write the end text in Requirements")
+
     r = b.sound_rule
     if r.mode == "in_app":
         add("sound", "Add the brand's sound when posting", f"Pick it in the Instagram/YouTube app, at least {r.min_volume * 100:.0f}% volume. The post checklist reminds you.")

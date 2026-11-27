@@ -480,14 +480,16 @@ details.adv > summary { cursor: pointer; font-weight: 600; font-size: 13px; colo
 .req-preview { position: sticky; top: 64px; }
 .lp-frame { position: relative; aspect-ratio: 9 / 16; width: 100%; border-radius: 16px; overflow: hidden; background: linear-gradient(170deg, #2a3550 0%, #1b2233 55%, #0f131d 100%); user-select: none; touch-action: none; border: 1px solid var(--border-strong); }
 .lp-scene { position: absolute; inset: 24% 12% 40%; border-radius: 12px; background: radial-gradient(circle at 40% 40%, #5a7bd8 0, #2b3c75 45%, transparent 70%); opacity: 0.6; }
-.lp-cap { position: absolute; left: 10%; right: 10%; top: 60%; text-align: center; color: #fff; font-weight: 900; font-size: 15px; text-shadow: 0 2px 4px #000; }
+.lp-cap { position: absolute; left: 10%; right: 10%; min-height: 22px; display: flex; align-items: center; justify-content: center; text-align: center; color: #fff; font-weight: 900; font-size: 15px; text-shadow: 0 2px 4px #000; border-radius: 6px; z-index: 2; }
+.lp-cap.movable { border: 1.5px dashed rgba(255, 255, 255, 0.7); background: rgba(255, 255, 255, 0.06); cursor: ns-resize; }
+.lp-cap.movable:hover, .lp-cap.movable:focus-visible { background: rgba(255, 255, 255, 0.14); }
 .lp-cap i { font-style: normal; color: #ffd300; }
 .lp-zone { position: absolute; pointer-events: none; }
 .lp-zone.ui { background: rgba(229, 36, 43, 0.22); border: 1px dashed rgba(255, 110, 110, 0.75); }
 .lp-zone.nogo { background: rgba(229, 36, 43, 0.38); }
 .lp-zone span { position: absolute; left: 4px; top: 3px; font-size: 9.5px; color: #ffd6d6; font-weight: 700; }
 .lp-template { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
-.lp-logo { position: absolute; cursor: grab; outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 3px; display: grid; place-items: center; }
+.lp-logo { position: absolute; cursor: grab; outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 3px; display: grid; place-items: center; z-index: 3; }
 .lp-logo:focus-visible { outline: 3px solid #fff; }
 .lp-frame.dragging .lp-logo { cursor: grabbing; }
 .lp-logo img { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
@@ -640,3 +642,10 @@ tr.picked td { background: var(--accent-soft); }
 .tab-count { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 6px; border-radius: 999px; background: var(--success-soft); color: var(--success); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .link-btn.small { font-size: 13px; }
 .link-btn.tiny { font-size: 11.5px; }
+
+/* ---------- campaign videos in Create → Clips; freshly added rows ---------- */
+.camp-videos { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; margin-bottom: 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-sunken); }
+.camp-video-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--border); font-size: 13px; color: var(--text-2); }
+.camp-video-row > .ellipsis { color: var(--text); }
+.video-row.fresh { background: var(--accent-soft); border-radius: var(--radius-sm); transition: background 0.6s; }
+.not-started-bar .alert-body { flex: 1; min-width: 0; }

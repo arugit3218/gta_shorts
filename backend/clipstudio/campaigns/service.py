@@ -98,11 +98,55 @@ def features(ctx: AppContext, project: dict, clip: dict, brief: Brief | None) ->
         if not brief.allow_sfx:
             out["sfx"] = "off"
             out["locked"].append("sfx")
+    # end text: clip edit → campaign ({title} = the clip's title)
+    end_cfg = e.get("end_text") or {}
+    camp_end = brief.end_text if brief else None
+    end_text = (end_cfg.get("text") or ((camp_end.text or "").replace("{title}", clip.get("title") or "").strip() if camp_end else "")).strip()
+    out["end_text"] = {
+        "enabled": bool(end_cfg.get("enabled", camp_end.enabled if camp_end else False)) and bool(end_text),
+        "text": end_text,
+        "duration": float(end_cfg.get("duration") or (camp_end.duration if camp_end else 2.5)),
+        "style": end_cfg.get("style") or (camp_end.style if camp_end else "dark"),
+        "look": end_cfg.get("look") or (camp_end.look if camp_end else "overlay"),
+        "required": bool(camp_end and camp_end.enabled and camp_end.text.strip()),
+    }
     if project.get("source_type") == "montage":
         # a montage's audio is the song; no extra music, effects or hook card
         out |= {"music": "none", "sfx": "off", "sound_id": None, "hook_overlay": out["hook_overlay"] | {"enabled": False}}
         out["polish"] |= {"jumpcut": "off", "zoom": "off", "cold_open": False, "emoji": False}
-        out["locked"] = sorted(set(out["locked"]) | {"music", "sfx", "hook"})
+        out["locked"] = sorted(set(out["locked"]) | {"music", "sfx", "hook", "end"})
+        out["end_text"] |= {"enabled": False, "required": False}
+    out["text_layout"] = text_layout(ctx, clip, brief, out)
+    return out
+
+
+def caption_style_for(ctx: AppContext, clip: dict, brief: Brief | None):
+    """The clip's caption look with the campaign's caption position applied (unless the clip set its own).
+    Returns (style, set_by_clip)."""
+    from ..media.captions import resolve_style
+
+    e = clip.get("edit") or {}
+    own = e.get("caption_style") or {}
+    style = resolve_style(e.get("caption_preset", ctx.settings.get().caption_preset), own)
+    by_clip = own.get("position") is not None
+    if not by_clip and brief and brief.caption_position is not None:
+        style = style.model_copy(update={"position": brief.caption_position})
+    return style, by_clip
+
+
+def text_layout(ctx: AppContext, clip: dict, brief: Brief | None, feat: dict) -> dict:
+    """Where captions, the title text and the end text go so the logo doesn't cover them."""
+    from .text_layout import layout
+
+    style, by_clip = caption_style_for(ctx, clip, brief)
+    logo = brief.logo.model_dump() if (brief and feat["logo"] and brief.logo.file) else None
+    hook = feat["hook_overlay"]["text"] if feat["hook_overlay"]["enabled"] else None
+    end = feat["end_text"]["text"] if feat["end_text"]["enabled"] else None
+    try:
+        out = layout(logo=logo, caption_style=style, caption_set_by_clip=by_clip, captions_on=bool((clip.get("edit") or {}).get("captions", True)), hook_text=hook, end_text=end)
+    except Exception:  # never block a render or the clip list on this
+        out = {"caption_position": style.position, "caption_moved": False, "hook_y": 0.2, "hook_moved": False, "end_y": 0.45, "end_moved": False, "logo_band": None, "caption_logo_overlap": 0.0}
+    out["caption_source"] = "clip" if by_clip else ("campaign" if brief and brief.caption_position is not None else "look")
     return out
 
 
@@ -179,6 +223,10 @@ def compliance(ctx: AppContext, project: dict, clip: dict) -> dict:
         has_audio=has_audio,
         caption_text=" ".join(x.w for x in words) if (clip.get("edit") or {}).get("captions", True) else "",
         hook_text=feat["hook_overlay"]["text"] if feat["hook_overlay"]["enabled"] else "",
+        end_text=feat["end_text"]["text"] if feat["end_text"]["enabled"] else "",
+        end_required=feat["end_text"]["required"],
+        caption_logo_overlap=float(feat["text_layout"].get("caption_logo_overlap") or 0.0),
+        caption_set_by_clip=feat["text_layout"].get("caption_source") == "clip",
         disclosure_on_screen=brief.disclosure.text if (brief and feat["disclosure"]) else "",
         transcript=analysis.get("transcript", ""),
         title=clip.get("title", ""),

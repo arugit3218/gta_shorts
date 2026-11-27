@@ -130,6 +130,8 @@ def patch_clip(clip_id: str, body: ClipPatch, c: AppContext = Depends(ctx)):
             e["polish"] = (edit.get("polish") or {}) | {k: v for k, v in e["polish"].items() if v is not None}
         if "hook_overlay" in e:
             e["hook_overlay"] = (edit.get("hook_overlay") or {}) | {k: v for k, v in e["hook_overlay"].items() if v is not None}
+        if "end_text" in e:
+            e["end_text"] = (edit.get("end_text") or {}) | {k: v for k, v in e["end_text"].items() if v is not None}
         if "music" in e and e["music"] != "upload" and edit.get("music_path"):
             Path(edit.pop("music_path")).unlink(missing_ok=True)
         if "caption_preset" in e and "caption_style" not in e:
@@ -172,6 +174,9 @@ def preview_frame(clip_id: str, body: PreviewFrame, c: AppContext = Depends(ctx)
             e["caption_style"] = {k: v for k, v in e["caption_style"].items() if v is not None}
         elif "caption_preset" in e:
             edit.pop("caption_style", None)
+        for k in ("hook_overlay", "end_text", "polish"):  # partial, like a save: merge onto what's stored
+            if k in e:
+                e[k] = (edit.get(k) or {}) | {x: v for x, v in e[k].items() if v is not None}
         edit |= e
     if body.caption_words is not None:
         edit["caption_words"] = [w.model_dump() for w in body.caption_words]

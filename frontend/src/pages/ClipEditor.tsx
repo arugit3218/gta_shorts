@@ -9,7 +9,7 @@ import { ShortcutHelp } from "../components/shortcuts";
 import { fmtTime } from "../format";
 import { clipOrder, useHotkeys, usePoll } from "../hooks";
 import { CheckList, CopyButton, PLATFORM_LABEL, SafeZoneOverlay, Verdict, ZoneLegend, useSafeZones } from "../components/campaign";
-import type { AspectRatio, Campaign, CaptionStyle, Clip, ClipWords, Compliance, Layout, Platform, Polish, PostedMap, SfxCue, SfxType, Word } from "../types";
+import type { AspectRatio, Campaign, CaptionStyle, Clip, ClipWords, Compliance, EndTextSpec, Layout, Platform, Polish, PostedMap, TextLayout, SfxCue, SfxType, Word } from "../types";
 import { ScoreBreakdown } from "./ProjectView";
 
 /** R3: 5 tabs instead of 9; each groups the old panels as sections. */
@@ -35,6 +35,7 @@ interface Draft {
   sfx_cues: SfxCue[];
   blur_burned: "auto" | "off";
   hook_overlay: { enabled: boolean; text: string; duration: number };
+  end_text: EndTextSpec;
   logo: boolean;
   disclosure: boolean;
   sound_id: string | null;
@@ -65,6 +66,13 @@ function draftFrom(c: Clip): Draft {
     sfx_cues: c.features?.sfx === "custom" ? c.features.sfx_cues : [],
     blur_burned: c.features?.blur_burned ?? "auto",
     hook_overlay: { enabled: c.features?.hook_overlay.enabled ?? false, text: c.features?.hook_overlay.text ?? c.title ?? "", duration: c.features?.hook_overlay.duration ?? 3.5 },
+    end_text: {
+      enabled: c.features?.end_text.enabled ?? false,
+      text: c.features?.end_text.text ?? "",
+      duration: c.features?.end_text.duration ?? 2.5,
+      style: c.features?.end_text.style ?? "dark",
+      look: c.features?.end_text.look ?? "overlay",
+    },
     logo: c.features?.logo ?? false,
     disclosure: c.features?.disclosure ?? false,
     sound_id: c.features?.sound_id ?? null,
@@ -86,6 +94,9 @@ function campaignEdit(d: Draft, base: Draft, hasCampaign: boolean) {
   const hook: Record<string, unknown> = {};
   for (const k of ["enabled", "text", "duration"] as const) if (d.hook_overlay[k] !== base.hook_overlay[k]) hook[k] = d.hook_overlay[k];
   if (Object.keys(hook).length) out.hook_overlay = hook;
+  const end: Record<string, unknown> = {};
+  for (const k of ["enabled", "text", "duration", "style", "look"] as const) if (d.end_text[k] !== base.end_text[k]) end[k] = d.end_text[k];
+  if (Object.keys(end).length) out.end_text = end;
   const pol: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(d.polish)) if (JSON.stringify(v) !== JSON.stringify((base.polish as unknown as Record<string, unknown>)[k])) pol[k] = v;
   if (Object.keys(pol).length) out.polish = pol;
@@ -499,7 +510,7 @@ function ClipEditorInner({ id }: { id: string }) {
                 )}
                 {!isMontage && presets && style && (
                   <EdSection title="Caption style" hint="Ready-made looks, or change font, colours, size, position and animation.">
-                    <StylePanel presets={presets} draft={draft} style={style} set={set} setStyle={setStyle} onPreview={() => makePreview()} previewBusy={previewBusy} />
+                    <StylePanel presets={presets} draft={draft} style={style} set={set} setStyle={setStyle} onPreview={() => makePreview()} previewBusy={previewBusy} layout={clip.features?.text_layout} />
                   </EdSection>
                 )}
                 <EdSection title="Title, hook and hashtags" hint="The title text at the start, and the words used in the post caption.">
@@ -783,6 +794,46 @@ function PresetSample({ p }: { p: CaptionStyle }) {
   );
 }
 
+/** Does the caption block at ``y`` overlap the logo's rows (from the last save's layout)? */
+function onLogo(y: number, style: CaptionStyle, layout?: TextLayout): boolean {
+  const band = layout?.logo_band;
+  if (!band) return false;
+  const h = style.max_lines * style.size * 1.2 + 2 * style.outline;
+  return Math.min(y + h / 2, band[1]) - Math.max(y - h / 2, band[0]) > 0;
+}
+
+/** Caption height: automatic (the campaign's spot or the look's own, kept clear of the logo) or set for this clip. */
+function CaptionPositionField({ draft, style, set, setStyle, layout }: { draft: Draft; style: CaptionStyle; set: SetDraft; setStyle: (k: keyof CaptionStyle, v: unknown) => void; layout?: TextLayout }) {
+  const own = draft.caption_style.position != null;
+  // automatic: what the last save worked out (preset changes show after saving / in Preview frame)
+  const autoPos = layout && layout.caption_source !== "clip" ? layout.caption_position : style.position;
+  const value = own ? style.position : autoPos;
+  const why = !layout ? "" : layout.caption_moved ? "moved clear of the logo" : layout.caption_source === "campaign" ? "the campaign's position" : "the caption look's spot";
+  return (
+    <div className="field">
+      <div className="row between" style={{ gap: 6 }}>
+        <label htmlFor="cap-y">
+          Vertical position: {Math.round(value * 100)}%{!own && why ? <span className="muted"> · automatic ({why})</span> : null}
+        </label>
+        {own && (
+          <button
+            className="link-btn small"
+            title="Follow the campaign / caption look again, kept clear of the logo"
+            onClick={() => {
+              const { position: _p, ...rest } = draft.caption_style;
+              set("caption_style", rest);
+            }}
+          >
+            Automatic
+          </button>
+        )}
+      </div>
+      <input id="cap-y" type="range" min={0.1} max={0.92} step={0.01} value={value} onChange={(e) => setStyle("position", +e.target.value)} />
+      {own && onLogo(value, style, layout) && <span className="small" style={{ color: "var(--warn)" }}>The logo covers part of the captions here. Move them, or press Automatic.</span>}
+    </div>
+  );
+}
+
 function StylePanel({
   presets,
   draft,
@@ -791,7 +842,9 @@ function StylePanel({
   setStyle,
   onPreview,
   previewBusy,
+  layout,
 }: {
+  layout?: TextLayout;
   presets: Record<string, CaptionStyle>;
   draft: Draft;
   style: CaptionStyle;
@@ -855,10 +908,7 @@ function StylePanel({
           <label>Size: {Math.round(style.size * 1000) / 10}% of height</label>
           <input type="range" min={0.025} max={0.09} step={0.002} value={style.size} onChange={(e) => setStyle("size", +e.target.value)} />
         </div>
-        <div className="field">
-          <label>Vertical position: {Math.round(style.position * 100)}%</label>
-          <input type="range" min={0.1} max={0.92} step={0.01} value={style.position} onChange={(e) => setStyle("position", +e.target.value)} />
-        </div>
+        <CaptionPositionField draft={draft} style={style} set={set} setStyle={setStyle} layout={layout} />
         <div className="field">
           <label>Max words per caption: {style.max_words}</label>
           <input type="range" min={1} max={10} value={style.max_words} onChange={(e) => setStyle("max_words", +e.target.value)} />
@@ -1091,6 +1141,66 @@ function PolishPanel({ clip, draft, set, dirty, onClip }: { clip: Clip; draft: D
   );
 }
 
+const END_TEMPLATES = ["Follow for part 2", "Link in bio", "Watch the full stream", "Download now"];
+
+/** Text over the last seconds of the clip (call to action / end screen). */
+function EndTextControls({ clip, draft, set }: { clip: Clip; draft: Draft; set: SetDraft }) {
+  const e = draft.end_text;
+  const required = !!clip.features?.end_text.required;
+  const upd = (p: Partial<EndTextSpec>) => set("end_text", { ...e, ...p });
+  return (
+    <>
+      <div className="divider" />
+      <div className="stack sm">
+        <label className="check">
+          <input type="checkbox" checked={e.enabled} onChange={(ev) => upd({ enabled: ev.target.checked, text: e.text || "Follow for part 2" })} />
+          <span>
+            <strong>End text</strong> for the last seconds
+            <br />
+            <span className="small muted">{required ? "The campaign asks for this on every clip." : "A call to action like “Follow for part 2”. The clip keeps its length."}</span>
+          </span>
+        </label>
+        {required && !e.enabled && <Alert kind="warn">The campaign requires end text, so this clip will fail its check without it.</Alert>}
+        {e.enabled && (
+          <>
+            <input className="input" value={e.text} maxLength={160} aria-label="End text" placeholder="e.g. Follow for part 2" onChange={(ev) => upd({ text: ev.target.value })} />
+            <div className="row wrap" style={{ gap: 6 }}>
+              {END_TEMPLATES.map((t) => (
+                <button key={t} type="button" className={`chip-btn ${e.text === t ? "on" : ""}`} onClick={() => upd({ text: t })}>
+                  {t}
+                </button>
+              ))}
+            </div>
+            {!e.text.trim() && <span className="small" style={{ color: "var(--warn)" }}>Write the end text, or it won't appear.</span>}
+            <div className="grid cols-2">
+              <div className="field">
+                <label htmlFor="end-dur">Last {e.duration}s</label>
+                <input id="end-dur" type="range" min={1} max={Math.max(1, Math.min(6, Math.floor((draft.end - draft.start) / 2)))} step={0.5} value={e.duration} onChange={(ev) => upd({ duration: +ev.target.value })} />
+              </div>
+              <div className="field">
+                <span className="label-text">Look</span>
+                <div className="seg">
+                  <button className={e.look === "overlay" ? "active" : ""} onClick={() => upd({ look: "overlay" })}>
+                    Over the video
+                  </button>
+                  <button className={e.look === "card" ? "active" : ""} onClick={() => upd({ look: "card" })} title="The video is dimmed and blurred behind the text, and captions stop">
+                    End card
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="field">
+              <span className="label-text">Style</span>
+              <HookStylePicker value={e.style} onChange={(v) => upd({ style: v })} />
+            </div>
+            <span className="tiny muted">Use “Preview frame” near the end of the clip to see it.</span>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
 function OverlaysPanel({ clip, draft, set, campaign }: { clip: Clip; draft: Draft; set: SetDraft; campaign: Campaign | null }) {
   const b = campaign?.brief;
   return (
@@ -1142,6 +1252,7 @@ function OverlaysPanel({ clip, draft, set, campaign }: { clip: Clip; draft: Draf
         )}
       </div>
       )}
+      {!(clip.features?.locked ?? []).includes("end") && <EndTextControls clip={clip} draft={draft} set={set} />}
       <div className="divider" />
       {clip.analysis.mode !== "montage" && (
       <label className="check">

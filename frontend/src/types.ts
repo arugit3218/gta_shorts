@@ -186,6 +186,7 @@ export interface ClipFeatures {
   blur_burned: "auto" | "off";
   voice_enhance: boolean;
   hook_overlay: HookOverlay;
+  end_text: EndTextFeature;
   logo: boolean;
   disclosure: boolean;
   sound_id: string | null;
@@ -193,6 +194,33 @@ export interface ClipFeatures {
   original_volume: number;
   locked: string[];
   polish: Polish;
+  /** where captions / title text / end text actually go (kept clear of the logo) */
+  text_layout: TextLayout;
+}
+
+export type EndLook = "overlay" | "card";
+export interface EndTextSpec {
+  enabled: boolean;
+  text: string;
+  duration: number;
+  style: HookStyle;
+  look: EndLook;
+}
+export interface EndTextFeature extends EndTextSpec {
+  /** the campaign asks for end text on every clip */
+  required: boolean;
+}
+export interface TextLayout {
+  caption_position: number;
+  /** clip = set on this clip · campaign = the campaign's position · look = the caption look's own spot */
+  caption_source: "clip" | "campaign" | "look";
+  caption_moved: boolean;
+  caption_logo_overlap: number;
+  hook_y: number;
+  hook_moved: boolean;
+  end_y?: number;
+  end_moved: boolean;
+  logo_band: [number, number] | null;
 }
 
 export interface CaptionStyle {
@@ -232,6 +260,7 @@ export interface ClipEdit {
   sfx_cues?: SfxCue[];
   blur_burned?: "auto" | "off";
   hook_overlay?: { enabled: boolean; text?: string | null; duration: number; style?: HookStyle | null };
+  end_text?: Partial<EndTextSpec>;
   polish?: Partial<Polish>;
   logo?: boolean;
   disclosure?: boolean;
@@ -388,6 +417,18 @@ export interface UrlInfo {
   estimate: { source_mb: number; temp_mb: number; output_mb: number; total_mb: number };
   free_mb: number;
   existing_project: { id: string; name: string } | null;
+  /** Videos already made from this link (any spelling of it), newest first. */
+  existing_projects?: ExistingVideo[];
+}
+
+export interface ExistingVideo {
+  id: string;
+  name: string;
+  status: Project["status"];
+  stage: Project["stage"];
+  clip_count: number;
+  campaign_id: string | null;
+  campaign_name: string | null;
 }
 
 export interface ModelsInfo {
@@ -466,6 +507,7 @@ export interface Brief {
   sound_rule: { mode: "none" | "in_app" | "burn"; min_volume: number; original_volume: number };
   disclosure: { text: string; on_screen: boolean; in_caption: boolean; corner: Corner };
   hook_overlay: { enabled: boolean; duration: number; text: string };
+  end_text: EndTextSpec;
   allow_music: boolean;
   allow_sfx: boolean;
   english_only: boolean;
@@ -486,6 +528,8 @@ export interface Brief {
   /** overrides of the style ("" = the style's choice) */
   layout: "" | Layout;
   caption_preset: string;
+  /** where captions sit on every clip (centre, fraction of height); null = the caption look's own spot */
+  caption_position: number | null;
 }
 
 export interface BriefSummary {

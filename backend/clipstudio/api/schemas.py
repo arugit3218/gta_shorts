@@ -81,12 +81,14 @@ class CreateUrlProject(BaseModel):
     options: ProcessOptions = ProcessOptions()
     start: bool = True
     campaign_id: str | None = Field(None, max_length=40)
+    allow_duplicate: bool = False  # the same video is already in this campaign: make another copy anyway
 
 
 class BulkUrls(BaseModel):
     urls: list[str] = Field(min_length=1, max_length=50)
     options: ProcessOptions = ProcessOptions()
     campaign_id: str | None = Field(None, max_length=40)
+    start: bool = True  # False: add them to the campaign without processing yet ("not started")
 
 
 class ImportPath(BaseModel):
@@ -131,6 +133,8 @@ class BulkClipEdit(BaseModel):
     ids: list[str] | None = Field(None, max_length=500)  # only these clips (overrides scope)
     render: bool = True
     recipe_id: str | None = Field(None, max_length=40)  # apply a saved recipe's look to every clip
+    caption_position: float | None = Field(None, ge=0.1, le=0.92)  # where captions sit (centre, fraction of height)
+    caption_position_auto: bool = False  # drop the clips' own caption position: back to the campaign / look, clear of the logo
 
 
 
@@ -167,6 +171,15 @@ class HookOverlayEdit(BaseModel):
     style: Literal["box", "dark", "yellow", "banner", "bold", "outline"] | None = None
 
 
+class EndTextEdit(BaseModel):
+    # every field optional, like the title text: what isn't set follows the campaign
+    enabled: bool | None = None
+    text: str | None = Field(None, max_length=160)
+    duration: float | None = Field(None, ge=1, le=6)
+    style: Literal["box", "dark", "yellow", "banner", "bold", "outline"] | None = None
+    look: Literal["overlay", "card"] | None = None
+
+
 class SfxCue(BaseModel):
     type: Literal["pop", "whoosh", "hit", "riser", "ding"]
     t: float = Field(ge=0, le=600)
@@ -191,6 +204,7 @@ class ClipEdit(BaseModel):
     sfx_cues: list[SfxCue] | None = Field(None, max_length=12)
     blur_burned: Literal["auto", "off"] | None = None
     hook_overlay: HookOverlayEdit | None = None
+    end_text: EndTextEdit | None = None
     logo: bool | None = None
     disclosure: bool | None = None
     sound_id: str | None = Field(None, max_length=40)

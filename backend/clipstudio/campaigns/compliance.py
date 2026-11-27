@@ -40,6 +40,10 @@ class ClipFacts:
     has_audio: bool = True
     caption_text: str = ""
     hook_text: str = ""
+    end_text: str = ""  # text over the last seconds, when on
+    end_required: bool = False  # the campaign asks for end text on every clip
+    caption_logo_overlap: float = 0.0  # share of the caption block the logo sits on
+    caption_set_by_clip: bool = False
     disclosure_on_screen: str = ""
     transcript: str = ""
     title: str = ""
@@ -153,6 +157,21 @@ def check_clip(brief: Brief | None, f: ClipFacts) -> list[Check]:
                         st = "warn"
                     out.append(Check(f"logo_safe_{p}", f"Logo safe zone · {LABELS[p]}", st, "; ".join(msgs)))
 
+    # Text vs logo ------------------------------------------------------------------
+    if f.logo_enabled and f.caption_text and f.logo_mask is not None and f.logo_mask.any():
+        ov = f.caption_logo_overlap
+        where = "Move them in the Captions tab (Caption style → Vertical position) or move the logo." if f.caption_set_by_clip else "Set the caption position on the campaign or move the logo."
+        if ov > 0.25:
+            out.append(Check("caption_logo", "Captions clear of the logo", "fail", f"The logo covers about {ov * 100:.0f}% of the captions. {where}"))
+        elif ov > 0:
+            out.append(Check("caption_logo", "Captions clear of the logo", "warn", f"The logo touches the captions (about {ov * 100:.0f}%). {where}"))
+        else:
+            out.append(Check("caption_logo", "Captions clear of the logo", "pass", "Captions and logo don't overlap"))
+
+    # End text ------------------------------------------------------------------------
+    if f.end_required:
+        out.append(Check("end_text", "End text", "pass" if f.end_text else "fail", f"“{f.end_text}” at the end" if f.end_text else "The campaign asks for end text; it's turned off for this clip (Captions tab → End text)."))
+
     # Disclosure --------------------------------------------------------------------
     disc = b.disclosure
     if disc.text and disc.on_screen:
@@ -175,7 +194,7 @@ def check_clip(brief: Brief | None, f: ClipFacts) -> list[Check]:
         out.append(Check("sfx", "No sound effects", "fail", "This campaign doesn't allow sound effects. Turn them off for this clip."))
 
     # Text: English / banned words / required tags -----------------------------------
-    on_screen = " ".join(x for x in (f.hook_text, f.caption_text, f.disclosure_on_screen) if x)
+    on_screen = " ".join(x for x in (f.hook_text, f.caption_text, f.end_text, f.disclosure_on_screen) if x)
     if b.english_only:
         problems = []
         worst = "pass"

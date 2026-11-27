@@ -15,7 +15,7 @@ import shutil
 import socket
 from pathlib import Path
 from typing import Callable
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from ..cancel import NEVER, CancelToken
 from ..errors import Cancelled, InvalidInput, MediaError
@@ -40,6 +40,36 @@ def validate_url(url: str) -> str:
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
             raise InvalidInput("URLs pointing to local or private network addresses are not allowed")
     return urlunparse(p._replace(fragment=""))
+
+
+_YT_HOSTS = {"youtube.com", "m.youtube.com", "music.youtube.com", "youtube-nocookie.com", "youtu.be"}
+_YT_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+_TRACKING = {"si", "feature", "fbclid", "igshid", "igsh", "t", "start", "pp", "ab_channel", "ref", "ref_src", "s"}
+
+
+def same_video_key(url: str) -> str:
+    """A key that's equal for different spellings of one video's link, used to spot a link that was
+    already added: youtu.be/ID, youtube.com/watch?v=ID&si=…, /shorts/ID and /live/ID are the same video;
+    elsewhere tracking parameters, "www." and a trailing slash are ignored. Never used to fetch anything."""
+    try:
+        p = urlparse((url or "").strip())
+    except ValueError:
+        return (url or "").strip()
+    host = (p.hostname or "").lower().removeprefix("www.")
+    if host in _YT_HOSTS:
+        vid = ""
+        if host == "youtu.be":
+            vid = p.path.strip("/").split("/")[0]
+        elif p.path == "/watch":
+            vid = dict(parse_qsl(p.query)).get("v", "")
+        else:
+            parts = p.path.strip("/").split("/")
+            if len(parts) >= 2 and parts[0] in ("shorts", "live", "embed", "v"):
+                vid = parts[1]
+        if _YT_ID.match(vid):
+            return f"youtube:{vid}"
+    query = urlencode(sorted((k, v) for k, v in parse_qsl(p.query) if k.lower() not in _TRACKING and not k.lower().startswith("utm_")))
+    return f"{host}{p.path.rstrip('/')}" + (f"?{query}" if query else "")
 
 
 def url_key(url: str) -> str:

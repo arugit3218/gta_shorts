@@ -68,6 +68,20 @@ class HookOverlay(BaseModel):
     text: str = Field("", max_length=120)
 
 
+EndStyle = Literal["box", "dark", "yellow", "banner", "bold", "outline"]
+
+
+class EndText(BaseModel):
+    """Text over the last seconds of every clip: a call to action or the brand's end screen."""
+
+    enabled: bool = False
+    # {title} = the clip's title
+    text: str = Field("", max_length=120)
+    duration: float = Field(2.5, ge=1, le=6)
+    style: EndStyle = "dark"
+    look: Literal["overlay", "card"] = "overlay"  # card: video dimmed and blurred behind the text
+
+
 class Brief(BaseModel):
     name: str = Field("Untitled campaign", max_length=200)
     source: str = Field("", max_length=80, description="where the campaign is from, e.g. 'Clipster' (free text)")
@@ -90,6 +104,7 @@ class Brief(BaseModel):
     sound_rule: SoundRule = SoundRule()
     disclosure: Disclosure = Disclosure()
     hook_overlay: HookOverlay = HookOverlay()
+    end_text: EndText = EndText()
     allow_music: bool = True
     allow_sfx: bool = True
     # text rules
@@ -112,6 +127,8 @@ class Brief(BaseModel):
     # optional overrides of the style's framing and caption look ("" = what the style uses)
     layout: Literal["", "auto", "center", "blur", "split", "stream"] = ""
     caption_preset: str = Field("", max_length=40)
+    # where captions sit for every clip (centre, fraction of the height); None = the caption look's own spot
+    caption_position: float | None = Field(None, ge=0.1, le=0.92)
 
     @field_validator("required_hashtags")
     @classmethod

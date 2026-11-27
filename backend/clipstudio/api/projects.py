@@ -141,14 +141,36 @@ def inspect_url(body: InspectUrl, c: AppContext = Depends(ctx)):
     s = c.settings.get()
     dmin, dmax = DURATION_RANGES[s.duration_preset]
     est = estimate_processing(info["duration"] or 600, source_bytes=info["estimated_bytes"] or int((info["duration"] or 600) * 1.2 * MB), clips=s.max_clips, clip_seconds=(dmin + dmax) / 2, output_height=s.output_height)
-    existing = c.db.one("SELECT id, name FROM projects WHERE source_url = ? ORDER BY created_at DESC LIMIT 1", (info["url"],))
-    return info | {"estimate": est.as_dict(), "free_mb": round(free_bytes(c.paths.work) / MB), "existing_project": existing}
+    same = _videos_with_link(c, info["url"])
+    existing = {"id": same[0]["id"], "name": same[0]["name"]} if same else None
+    return info | {"estimate": est.as_dict(), "free_mb": round(free_bytes(c.paths.work) / MB), "existing_project": existing, "existing_projects": same}
+
+
+def _same_link_rows(c: AppContext, url: str) -> list[dict]:
+    """Projects made from the same video link (youtu.be vs youtube.com, tracking parameters… ignored), newest first."""
+    key = dl.same_video_key(url)
+    rows = c.db.query("SELECT * FROM projects WHERE source_url IS NOT NULL ORDER BY created_at DESC")
+    return [r for r in rows if dl.same_video_key(r["source_url"]) == key]
+
+
+def _videos_with_link(c: AppContext, url: str) -> list[dict]:
+    """Same-link projects the user knows as videos (not montage footage), with their campaign's name."""
+    refs = montage_refs(c)
+    names = {r["id"]: r["name"] for r in c.db.query("SELECT id, name FROM campaigns")}
+    out = []
+    for r in _same_link_rows(c, url):
+        pub = _public(c, r, refs)
+        if pub["stage"] == "footage":
+            continue
+        out.append({"id": pub["id"], "name": pub["name"], "status": pub["status"], "stage": pub["stage"], "clip_count": pub["clip_count"],
+                    "campaign_id": pub.get("campaign_id"), "campaign_name": names.get(pub.get("campaign_id") or "")})
+    return out[:5]
 
 
 def _create_url(c: AppContext, w: Worker, url: str, name: str | None, options: dict, campaign_id: str | None, start: bool) -> dict:
     url = dl.validate_url(url)
-    # Avoid re-downloading: reuse the downloaded files of an earlier project with the same URL.
-    prev = c.db.one("SELECT source_path, audio_path, extra, duration, width, height, fps FROM projects WHERE source_url = ? AND (source_path IS NOT NULL OR audio_path IS NOT NULL) ORDER BY created_at DESC LIMIT 1", (url,))
+    # Avoid re-downloading: reuse the downloaded files of an earlier project with the same video link.
+    prev = next((r for r in _same_link_rows(c, url) if r["source_path"] or r["audio_path"]), None)
     src = prev["source_path"] if prev and prev["source_path"] and Path(prev["source_path"]).exists() else None
     aud = prev["audio_path"] if prev and prev["audio_path"] and Path(prev["audio_path"]).exists() else None
     reuse = {}
@@ -162,25 +184,40 @@ def _create_url(c: AppContext, w: Worker, url: str, name: str | None, options: d
 
 @router.post("/projects")
 def create_url_project(body: CreateUrlProject, c: AppContext = Depends(ctx), w: Worker = Depends(worker)):
-    return _create_url(c, w, body.url, body.name, body.options.model_dump(exclude_none=True), _check_campaign(c, body.campaign_id), body.start)
+    cid = _check_campaign(c, body.campaign_id)
+    if not body.allow_duplicate:
+        dup = _duplicate_in(c, body.url, cid)
+        if dup:
+            raise InvalidInput(f"This video is already in {'this campaign' if cid else 'your videos'} as “{dup['name']}”. Open it, or choose to make another copy.")
+    return _create_url(c, w, body.url, body.name, body.options.model_dump(exclude_none=True), cid, body.start)
+
+
+def _duplicate_in(c: AppContext, url: str, campaign_id: str | None) -> dict | None:
+    """A video with the same link already in this campaign (or, without one, among videos with no campaign)."""
+    return next((v for v in _videos_with_link(c, url) if (v["campaign_id"] or None) == (campaign_id or None)), None)
 
 
 @router.post("/projects/bulk")
 def create_bulk(body: BulkUrls, c: AppContext = Depends(ctx), w: Worker = Depends(worker)):
     """Queue many links at once; they are processed one after another."""
     cid = _check_campaign(c, body.campaign_id)
-    created, errors = [], []
+    created, errors, existing = [], [], []
     seen = set()
     for raw in body.urls:
         u = raw.strip()
-        if not u or u in seen:
+        if not u or dl.same_video_key(u) in seen:
             continue
-        seen.add(u)
+        seen.add(dl.same_video_key(u))
+        dup = _duplicate_in(c, u, cid)
+        if dup:  # already added here: don't make a second copy (and second set of clips)
+            existing.append({"url": u[:300], "project": dup})
+            continue
         try:
-            created.append(_create_url(c, w, u, None, body.options.model_dump(exclude_none=True), cid, True))
+            # not started: no options stored, so starting later uses the campaign's settings as they are then
+            created.append(_create_url(c, w, u, None, body.options.model_dump(exclude_none=True) if body.start else {}, cid, body.start))
         except Exception as e:
             errors.append({"url": u[:300], "error": str(e)})
-    return {"created": created, "errors": errors}
+    return {"created": created, "errors": errors, "existing": existing}
 
 
 @router.patch("/projects/{project_id}")
@@ -565,6 +602,15 @@ def bulk_edit_clips(project_id: str, body: BulkClipEdit, c: AppContext = Depends
         edit = (cl["edit"] or {}) | patch
         if recipe:
             edit = apply_to_edit(recipe, edit, campaign=bool(project.get("campaign_id")))
+        if body.caption_position is not None or body.caption_position_auto:
+            cs = dict(edit.get("caption_style") or {})
+            if body.caption_position_auto:
+                cs.pop("position", None)
+            else:
+                cs["position"] = round(body.caption_position, 3)
+            edit["caption_style"] = cs
+        if edit == (cl["edit"] or {}):
+            continue  # nothing changes for this clip: don't mark it outdated or re-render it
         upd = {"edit": edit}
         if cl["render_status"] in ("done", "failed"):
             upd["render_status"] = "stale"

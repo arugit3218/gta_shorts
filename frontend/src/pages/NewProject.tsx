@@ -7,7 +7,7 @@ import { HelpTip } from "../components/help";
 import { INTENSITY, IntensityPicker, StylePicker, campaignOptions, styleOf, styleOptions, type Intensity, type StyleKey } from "../components/styles";
 import { LAYOUT_OPTIONS } from "../components/framing";
 import { Icon } from "../components/Icon";
-import { Alert, Bar, Modal, Spinner, useToast } from "../components/ui";
+import { Alert, Bar, Modal, Spinner, plural, useToast } from "../components/ui";
 import { fmtDuration, fmtMB } from "../format";
 import { usePoll } from "../hooks";
 import type { ProcessOptions, Project, Settings, UrlInfo } from "../types";
@@ -27,7 +27,7 @@ export default function NewProject() {
   const campaigns = usePoll(() => api.campaigns(), []).data;
   const musicCampaign = !!campaignId && campaigns?.find((c) => c.id === campaignId)?.brief.type === "music";
   // videos already added to the chosen campaign, so they aren't added twice
-  const campDetail = usePoll(() => (campaignId ? api.campaign(campaignId) : Promise.resolve(null)), [campaignId]).data;
+  const campDetail = usePoll(() => (campaignId ? api.campaign(campaignId) : Promise.resolve(null)), [campaignId], campaignId ? 8000 : null).data;
   const campVideos = (campDetail?.project_list ?? []).filter((p) => p.source_type !== "montage");
   // "Re-process with new settings" from a project page: same form, pre-filled with that project's options
   const reprocessId = params.get("reprocess");
@@ -129,6 +129,7 @@ export default function NewProject() {
               <CampaignSelect value={campaignId} onChange={setCampaignId} />
               <span className="hint">Clips get the campaign's logo, sound and text rules, and are checked against its brief before export.</span>
             </div>
+            {campVideos.length > 0 && <CampaignVideos name={campDetail?.name ?? "this campaign"} videos={campVideos} />}
             <div className="tabs" role="tablist">
               {(
                 [
@@ -149,36 +150,6 @@ export default function NewProject() {
             {tab === "path" && <PathSource onDone={setProject} campaignId={campaignId} />}
           </div>
         </div>
-      )}
-
-      {!project && !urlInfo && !bulk && !uploads && !reprocessId && campVideos.length > 0 && (
-        <section className="card">
-          <div className="card-head">
-            <h2>Already in {campDetail?.name}</h2>
-            <span className="small muted">No need to add these again</span>
-          </div>
-          <div className="card-body tight">
-            {campVideos.map((p) => (
-              <div className="list-row row" key={p.id} style={{ justifyContent: "space-between" }}>
-                <span className="ellipsis" style={{ minWidth: 0 }}>
-                  {p.name}
-                </span>
-                <span className="row nowrap">
-                  <span className="small muted">{p.stage === "not_started" ? "not started" : `${p.clip_count} clip${p.clip_count === 1 ? "" : "s"} · ${p.status}`}</span>
-                  {p.stage === "not_started" ? (
-                    <Link className="btn sm primary" to={`/new?setup=${p.id}`}>
-                      Start
-                    </Link>
-                  ) : (
-                    <Link className="btn sm" to={`/projects/${p.id}`}>
-                      Open
-                    </Link>
-                  )}
-                </span>
-              </div>
-            ))}
-          </div>
-        </section>
       )}
 
       {(project || urlInfo || bulk || uploads) && settings && <Configure project={project} urlInfo={urlInfo} bulk={bulk} uploads={uploads} settings={settings} onBack={back} onStarted={(v) => (started.current = v)} initialQuick={quickMode} campaignId={campaignId} setCampaignId={setCampaignId} reprocess={!!reprocessId} />}
@@ -318,6 +289,46 @@ function UploadSource({ onDone, onMany, campaignId }: { onDone: (p: Project) => 
           <span style={{ whiteSpace: "pre-line" }}>{error}</span>
         </Alert>
       )}
+    </div>
+  );
+}
+
+/** The chosen campaign's videos, shown before the upload/link box so nothing is added twice. */
+function CampaignVideos({ name, videos }: { name: string; videos: Project[] }) {
+  return (
+    <div className="camp-videos" role="region" aria-label={`Videos already in ${name}`}>
+      <div className="row between wrap" style={{ gap: 6 }}>
+        <strong className="small">Already in {name}</strong>
+        <span className="tiny muted">No need to add these again. Open one, or re-process it with new settings.</span>
+      </div>
+      {videos.slice(0, 6).map((p) => (
+        <div className="camp-video-row" key={p.id}>
+          <Icon name={p.source_type === "url" ? "link" : "film"} size={14} />
+          <span className="ellipsis" style={{ flex: 1, minWidth: 0 }} title={p.source_url ?? p.name}>
+            {p.name}
+          </span>
+          <span className="tiny muted nowrap">
+            {p.stage === "not_started" ? "not started" : p.status === "processing" || p.status === "queued" ? "processing…" : p.status === "failed" ? "failed" : `${plural(p.clip_count, "clip")}`}
+          </span>
+          {p.stage === "not_started" ? (
+            <Link className="btn sm primary" to={`/new?setup=${p.id}`}>
+              Start
+            </Link>
+          ) : (
+            <span className="row nowrap" style={{ gap: 6 }}>
+              <Link className="btn sm" to={`/projects/${p.id}`}>
+                Open
+              </Link>
+              {p.status !== "processing" && p.status !== "queued" && (
+                <Link className="btn sm ghost" to={`/new?reprocess=${p.id}`} title="Find clips again with different settings (the download is reused)">
+                  Re-process
+                </Link>
+              )}
+            </span>
+          )}
+        </div>
+      ))}
+      {videos.length > 6 && <span className="tiny muted">and {videos.length - 6} more on the campaign page</span>}
     </div>
   );
 }
@@ -515,7 +526,16 @@ function Configure({
   const duration = project?.duration ?? urlInfo?.duration ?? 0;
   const res = project ? `${project.width}×${project.height}` : urlInfo?.height ? `${urlInfo.width ?? "?"}×${urlInfo.height}` : "–";
 
+  // the same video link already made into a video: in this campaign (blocks a silent duplicate) or elsewhere
+  const sameLink = urlInfo?.existing_projects ?? [];
+  const dupHere = sameLink.find((v) => (v.campaign_id ?? "") === campaignId) ?? null;
+  const dupElsewhere = dupHere ? null : sameLink[0] ?? null;
+  const [copyAnyway, setCopyAnyway] = useState(false);
+  useEffect(() => setCopyAnyway(false), [campaignId, urlInfo?.url]);
+  const blockedByDup = !!dupHere && !copyAnyway;
+
   const start = async () => {
+    if (blockedByDup) return;
     setBusy(true);
     setError(null);
     onStarted?.(true);
@@ -525,7 +545,7 @@ function Configure({
         await api.process(project.id, opts, reprocess && keepClips);
         nav(`/projects/${project.id}`);
       } else if (urlInfo) {
-        const p = await api.createUrlProject(urlInfo.url, opts, urlInfo.title, campaignId);
+        const p = await api.createUrlProject(urlInfo.url, opts, urlInfo.title, campaignId, copyAnyway);
         nav(`/projects/${p.id}`);
       } else if (uploads) {
         for (const u of uploads) {
@@ -536,6 +556,7 @@ function Configure({
       } else if (bulk) {
         const r = await api.createBulk(bulk, opts, campaignId);
         if (r.errors.length) toast(`${r.errors.length} link(s) skipped: ${r.errors[0].error}`, "error");
+        if (r.existing.length) toast(`${plural(r.existing.length, "link")} already added (e.g. “${r.existing[0].project.name}”), so not added again`);
         nav(campaignId ? `/campaigns/${campaignId}` : "/projects");
       }
       toast("Processing started");
@@ -600,9 +621,43 @@ function Configure({
             <Alert kind="warn" title="No audio track">This video has no audio, so clips can't be found from speech.</Alert>
           </div>
         )}
-        {urlInfo?.existing_project && (
+        {dupHere && (
           <div style={{ marginTop: 14 }}>
-            <Alert kind="info">You already have a project for this link. The downloaded file will be reused, not downloaded again.</Alert>
+            <Alert kind="warn" title={`Already in ${dupHere.campaign_name ?? "your videos"}`}>
+              <span className="stack sm">
+                <span>
+                  This link is already the video “{dupHere.name}” ({dupHere.stage === "not_started" ? "not started" : dupHere.status === "processing" || dupHere.status === "queued" ? "processing now" : dupHere.status === "failed" ? "failed" : plural(dupHere.clip_count, "clip")}). Use that one instead of adding it twice.
+                </span>
+                <span className="row wrap" style={{ gap: 8 }}>
+                  {dupHere.stage === "not_started" ? (
+                    <Link className="btn sm primary" to={`/new?setup=${dupHere.id}`}>
+                      Choose its settings
+                    </Link>
+                  ) : (
+                    <>
+                      <Link className="btn sm primary" to={`/projects/${dupHere.id}`}>
+                        Open it
+                      </Link>
+                      {dupHere.status !== "processing" && dupHere.status !== "queued" && (
+                        <Link className="btn sm" to={`/new?reprocess=${dupHere.id}`}>
+                          Re-process it with new settings
+                        </Link>
+                      )}
+                    </>
+                  )}
+                </span>
+                <label className="check small">
+                  <input type="checkbox" checked={copyAnyway} onChange={(e) => setCopyAnyway(e.target.checked)} /> Make a second copy anyway (its own separate clips)
+                </label>
+              </span>
+            </Alert>
+          </div>
+        )}
+        {dupElsewhere && (
+          <div style={{ marginTop: 14 }}>
+            <Alert kind="info">
+              You also have this video as “{dupElsewhere.name}”{dupElsewhere.campaign_name ? ` in ${dupElsewhere.campaign_name}` : ""}. Its download is reused, so nothing is downloaded twice.
+            </Alert>
           </div>
         )}
       </div>
@@ -872,8 +927,9 @@ function Configure({
       )}
       {error && <Alert kind="danger" title="Couldn't start">{error}</Alert>}
 
-      <div className="row" style={{ justifyContent: "flex-end" }}>
-        <button className="btn primary lg" onClick={start} disabled={busy || (estimate ? !estimate.ok : false) || (!!opts.quick && opts.quick_end != null && opts.quick_end <= (opts.quick_start ?? 0))}>
+      <div className="row wrap" style={{ justifyContent: "flex-end" }}>
+        {blockedByDup && <span className="small muted" style={{ alignSelf: "center", marginRight: 10 }}>Already added: open it above, or tick “Make a second copy”.</span>}
+        <button className="btn primary lg" onClick={start} disabled={busy || blockedByDup || (estimate ? !estimate.ok : false) || (!!opts.quick && opts.quick_end != null && opts.quick_end <= (opts.quick_start ?? 0))}>
           {busy ? <Spinner /> : <Icon name="zap" />} {opts.quick ? (uploads ? `Make ${uploads.length} clips` : "Make clip") : many ? `Queue ${many.length} videos` : "Find clips"}
         </button>
       </div>

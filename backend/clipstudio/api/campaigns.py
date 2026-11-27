@@ -229,7 +229,7 @@ def _save(c: AppContext, row: dict, brief: Brief, *, name: str | None = None, st
     return _public(c, get_campaign(c, row["id"]), detail=True)
 
 
-VISUAL_KEYS = {"logo", "disclosure", "hook_overlay", "sound_rule", "sounds", "allow_music", "allow_sfx", "output_height"}
+VISUAL_KEYS = {"logo", "disclosure", "hook_overlay", "end_text", "caption_position", "sound_rule", "sounds", "allow_music", "allow_sfx", "output_height"}
 
 
 @router.get("/campaign-presets")
