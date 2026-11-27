@@ -37,3 +37,11 @@ export function scoreTone(score: number): "excellent" | "strong" | "review" | "l
   if (score >= 55) return "review";
   return "low";
 }
+
+/** 1234 → "1.2K", 2500000 → "2.5M" */
+export function fmtCount(n: number | null | undefined): string {
+  if (n == null) return "–";
+  if (n < 1000) return String(n);
+  if (n < 1e6) return `${(n / 1000).toFixed(n < 10000 ? 1 : 0).replace(/\.0$/, "")}K`;
+  return `${(n / 1e6).toFixed(n < 1e7 ? 1 : 0).replace(/\.0$/, "")}M`;
+}

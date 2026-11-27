@@ -227,6 +227,7 @@ def compliance(ctx: AppContext, project: dict, clip: dict) -> dict:
         end_required=feat["end_text"]["required"],
         caption_logo_overlap=float(feat["text_layout"].get("caption_logo_overlap") or 0.0),
         caption_set_by_clip=feat["text_layout"].get("caption_source") == "clip",
+        qa=analysis.get("qa") if (rendered and clip.get("render_status") == "done") else None,
         disclosure_on_screen=brief.disclosure.text if (brief and feat["disclosure"]) else "",
         transcript=analysis.get("transcript", ""),
         title=clip.get("title", ""),

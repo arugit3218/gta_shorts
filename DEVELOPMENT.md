@@ -1,5 +1,24 @@
 # Development log
 
+## Round 5: ideas adapted from nero-harsh/clipstudio (2026-11-28)
+
+Rebuilt in this codebase with his code as the reference; nothing was copied wholesale.
+- **Quality check after every render** (`media/qa.py`). Measures loudness, true peak, frozen and black picture, and rapid flashing. Results are stored as `analysis.qa` and shown as checks (`qa_sound`, `qa_picture`, `qa_flashing`). Music edits only report silence. Silent on purpose shows "not checked". Off switch: Settings → `qa_check`.
+- **Two-pass loudness** (`render.measure_mix_loudness`, `loudnorm_filter`). Falls back to one pass if measuring fails.
+    - Found and fixed: `alimiter`'s default auto-level was adding make-up gain after loudnorm, so every render was about 1.5 dB hot (-12.5 LUFS). Now `level=disabled` with limit 0.84, giving -14.0 LUFS and about -2 dBTP. The song in music edits is no longer pushed up either.
+- **No weak padding clip.** The minimum score is strict in highlights, action and the merge step. A video where nothing clears it finishes "ready" with 0 clips and a reason, keeps any clips it already had on re-process, and shows on Home (`todo.no_clips`). "No moments of that length at all" is still an error.
+- **Post stats** (`download.post_stats`, `posting.refresh_stats`, columns on `posts`):
+    - "Refresh stats" on the Post queue's Posted list (newest 25 links) and "Refresh views" in the editor.
+    - A campaign shows its total views.
+    - Instagram usually refuses without a login; the reason is shown.
+    - The last good numbers are kept when a refresh fails; a new link clears them.
+- **Captions without libass** (`media/caption_png.py`): draws the app's own ASS output (captions with highlight and emphasis, title and end text, #ad, POV, progress bar) with Pillow and overlays it via `movie=…:f=concat`.
+    - Used automatically when FFmpeg lacks libass. `CLIPSTUDIO_CAPTIONS=images|libass` forces a path.
+    - Pop-in animations and fades are dropped, and emoji are left out.
+    - Memory is about 36 MB for a 60 s clip. Home shows a one-time note.
+- Also fixed: the cold-open teaser no longer shows the end text. The bulk "skip unchanged" from round 4 now applies only to caption position, so Framing and Apply recipe re-render as before.
+- Tests: `tests/test_round5.py` (10). The full suite passes (122), and the montage, polish and round-5 tests pass with `CLIPSTUDIO_CAPTIONS=images`.
+
 ## Round 4 from user feedback (2026-11-27)
 
 - **#4 Same link added twice.** Create → Clips now lists the chosen campaign's videos *above* the upload/link box (Open, Start, Re-process). Links are matched with `download.same_video_key()`, so youtu.be, watch?v= with `si`/`t`, /shorts and /live count as one video.

@@ -17,6 +17,7 @@ in source time while captions, overlays, zooms and sound effects work in output 
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -280,6 +281,17 @@ def _ass_filter(name: str, workdir: Path) -> str:
     return f"ass={name}:fontsdir=fonts" if (workdir / "fonts").exists() else f"ass={name}"
 
 
+def ass_layer(name: str, ass_text: str, workdir: Path, src: str, out: str, duration: float) -> str:
+    """Burn an ASS file onto ``[src]`` → ``[out]``: with libass when FFmpeg has it, otherwise drawn as
+    images (media/caption_png.py), so captions also work with Homebrew's FFmpeg 8.x."""
+    from .caption_png import overlay_chain, use_images
+
+    if use_images():
+        return overlay_chain(ass_text, name, workdir, src, out, duration)
+    (workdir / f"{name}.ass").write_text(ass_text, encoding="utf-8")
+    return f"[{src}]{_ass_filter(f'{name}.ass', workdir)}[{out}]"
+
+
 def _link_fonts(workdir: Path) -> None:
     if FONTS_DIR.is_dir():
         try:
@@ -388,8 +400,7 @@ def build_video_graph(
         cur = "vk"
         words = [x for x in words if x.s < card_at]
     if spec.captions and words and spec.style is not None:
-        (workdir / "subs.ass").write_text(build_ass(words, spec.style, width=w, height=h, emphasis=post.emphasis), encoding="utf-8")
-        chains.append(f"[{cur}]{_ass_filter('subs.ass', workdir)}[vc]")
+        chains.append(ass_layer("subs", build_ass(words, spec.style, width=w, height=h, emphasis=post.emphasis), workdir, cur, "vc", post.duration))
         cur = "vc"
     if post.emoji and spec.style is not None:
         ey = int(spec.style.position * h - spec.style.size * h * (1.1 + 0.5 * (spec.style.max_lines - 1)) - post.emoji_size)
@@ -404,14 +415,61 @@ def build_video_graph(
         hook = HookText(hook.text, hook.duration, seam if stream.get("cam_top", True) else 1 - seam, hook.style)
     overlay = build_overlay_ass(w, h, hook=hook, disclosure=spec.disclosure, clip_duration=post.duration, progress=post.progress, end_text=end)
     if overlay:
-        (workdir / "overlay.ass").write_text(overlay, encoding="utf-8")
-        chains.append(f"[{cur}]{_ass_filter('overlay.ass', workdir)}[vo]")
+        chains.append(ass_layer("overlay", overlay, workdir, cur, "vo", post.duration))
         cur = "vo"
     if logo_idx is not None and spec.logo:
         chains.append(logo_filter(spec.logo, logo_idx, w, h, fps, cur, "vl"))
         cur = "vl"
     chains.append(f"[{cur}]format=yuv420p[v]")
     return ";".join(chains)
+
+
+LOUDNORM = "loudnorm=I=-14:TP=-1.5:LRA=11"
+
+
+def loudnorm_filter(measured: dict | None) -> str:
+    """Second pass of two-pass loudness (adapted from nero-harsh/clipstudio): with the first pass's numbers
+    the correction is one steady gain to -14 LUFS; without them, FFmpeg's single-pass dynamic mode."""
+    try:
+        if measured and all(k in measured for k in ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")):
+            m = {k: float(measured[k]) for k in ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")}
+            if all(v == v and abs(v) != float("inf") for v in m.values()) and m["input_i"] > -70:
+                return (
+                    f"{LOUDNORM}:measured_I={m['input_i']:.2f}:measured_TP={m['input_tp']:.2f}:measured_LRA={m['input_lra']:.2f}"
+                    f":measured_thresh={m['input_thresh']:.2f}:offset={m['target_offset']:.2f}:linear=true"
+                )
+    except (TypeError, ValueError):
+        pass
+    return LOUDNORM
+
+
+def measure_mix_loudness(cwd: Path, input_args: list[str], graph: str, duration: float, cancel: CancelToken) -> dict | None:
+    """First pass: run only the audio mix and read loudnorm's measurement. None if it can't be measured."""
+    (cwd / "agraph.txt").write_text(graph)
+    cmd = [ff.FFMPEG, "-hide_banner", "-nostdin", "-nostats", "-y", *input_args, "-/filter_complex", "agraph.txt", "-map", "[a]", "-t", f"{duration:.3f}", "-f", "null", "-"]
+    cancel.check()
+    try:
+        with tempfile.TemporaryFile(mode="w+") as errf:
+            proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.DEVNULL, stderr=errf, text=True)
+            cancel.attach(proc)
+            try:
+                proc.wait(timeout=max(60.0, duration * 4))
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                return None
+            finally:
+                cancel.detach(proc)
+            if cancel.cancelled:
+                raise Cancelled()
+            errf.seek(0)
+            err = errf.read()
+        if proc.returncode != 0:
+            return None
+        block = err[err.rfind("{") : err.rfind("}") + 1]
+        return json.loads(block) if block else None
+    except (OSError, ValueError):
+        return None
 
 
 def build_audio_graph(
@@ -421,7 +479,11 @@ def build_audio_graph(
     sound_idx: int | None = None,
     sfx_idx: list[tuple[int, Cue]] | None = None,
     post: Post | None = None,
+    measured: dict | None = None,
+    measure_only: bool = False,
 ) -> str | None:
+    """The audio mix. ``measure_only``: end in a loudness measurement (first pass of two-pass loudness);
+    ``measured``: the first pass's numbers, so the loudness correction is exact and linear."""
     if not spec.has_audio:
         return None
     post = post or Post(Timeline.full(spec.duration), list(spec.words))
@@ -474,9 +536,12 @@ def build_audio_graph(
         master = "".join(mix) + f"amix=inputs={len(mix)}:duration=first:normalize=0:dropout_transition=0"
     else:
         master = "[vmain]anull"
+    if measure_only:
+        parts.append(master + f",{LOUDNORM}:print_format=json[a]")
+        return ";".join(parts)
     if spec.normalise_audio:
-        master += ",loudnorm=I=-14:TP=-1.5:LRA=11"
-    master += ",alimiter=limit=0.89,aresample=48000[a]"
+        master += "," + loudnorm_filter(measured)
+    master += ",alimiter=limit=0.84:level=disabled,aresample=48000[a]"  # catch peaks at about -1.5 dB (no auto make-up gain)
     parts.append(master)
     return ";".join(parts)
 
@@ -573,7 +638,12 @@ def render_clip(
             post.emoji_size = size
 
         graph = build_video_graph(spec, layout, track, workdir, band=band, logo_idx=logo_idx, stream=stream, motion=motion, post=post)
-        agraph = build_audio_graph(spec, music_idx=music_idx, sound_idx=sound_idx, sfx_idx=sfx_idx, post=post)
+        measured = None
+        if spec.normalise_audio and spec.has_audio:  # two-pass loudness: measure the finished mix first
+            first = build_audio_graph(spec, music_idx=music_idx, sound_idx=sound_idx, sfx_idx=sfx_idx, post=post, measure_only=True)
+            if first:
+                measured = measure_mix_loudness(workdir, inputs.args, first, out_dur, cancel)
+        agraph = build_audio_graph(spec, music_idx=music_idx, sound_idx=sound_idx, sfx_idx=sfx_idx, post=post, measured=measured)
         if agraph:
             graph += ";" + agraph
         (workdir / "graph.txt").write_text(graph)

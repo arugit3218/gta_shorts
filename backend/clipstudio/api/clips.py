@@ -320,6 +320,17 @@ def unmark_posted(clip_id: str, platform: str, c: AppContext = Depends(ctx)):
     return {"posted": posting.posted_map(c.db, [clip["id"]]).get(clip["id"], {})}
 
 
+@router.post("/clips/{clip_id}/posts/stats")
+def refresh_post_stats(clip_id: str, c: AppContext = Depends(ctx)):
+    """Fetch the public numbers (views, likes, comments) of this clip's post links."""
+    clip = get_clip(c, clip_id)
+    rows = c.db.query("SELECT clip_id, platform, url FROM posts WHERE clip_id = ? AND url IS NOT NULL", (clip["id"],))
+    if not rows:
+        raise InvalidInput("Add the post's link first (Mark as posted → Add link).")
+    r = posting.refresh_stats(c.db, rows)
+    return r | {"posted": posting.posted_map(c.db, [clip["id"]]).get(clip["id"], {})}
+
+
 @router.get("/caption-presets")
 def caption_presets():
     return {k: v.model_dump() for k, v in PRESETS.items()}

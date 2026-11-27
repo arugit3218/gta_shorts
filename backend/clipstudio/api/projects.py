@@ -609,8 +609,8 @@ def bulk_edit_clips(project_id: str, body: BulkClipEdit, c: AppContext = Depends
             else:
                 cs["position"] = round(body.caption_position, 3)
             edit["caption_style"] = cs
-        if edit == (cl["edit"] or {}):
-            continue  # nothing changes for this clip: don't mark it outdated or re-render it
+        if (body.caption_position is not None or body.caption_position_auto) and not patch and not recipe and edit == (cl["edit"] or {}):
+            continue  # caption height already as asked: don't mark it outdated or re-render it
         upd = {"edit": edit}
         if cl["render_status"] in ("done", "failed"):
             upd["render_status"] = "stale"

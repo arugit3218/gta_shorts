@@ -314,7 +314,17 @@ export interface Clip {
   post_platforms?: Platform[];
 }
 
-export type PostedMap = Partial<Record<Platform, { url: string | null; at: number }>>;
+export interface PostMark {
+  url: string | null;
+  at: number;
+  /** public numbers from the post's link ("Refresh stats"); stats_error says why they couldn't be read */
+  views?: number | null;
+  likes?: number | null;
+  comments?: number | null;
+  stats_at?: number;
+  stats_error?: string | null;
+}
+export type PostedMap = Partial<Record<Platform, PostMark>>;
 
 export interface Word {
   w: string;
@@ -348,6 +358,7 @@ export interface Settings {
   auto_render: boolean;
   keep_intermediates: boolean;
   normalise_audio: boolean;
+  qa_check: boolean;
   max_download_height: 720 | 1080;
   min_free_gb: number;
   weights: Record<string, number>;
@@ -375,7 +386,8 @@ export interface SystemStatus {
   mode: string;
   memory: { total_mb: number; available_mb: number; percent: number };
   disk: { path: string; total_mb: number; free_mb: number; min_free_mb: number; low: boolean };
-  tools: { ffmpeg: boolean; ffprobe: boolean };
+  /** captions: "libass" normally; "images" when this FFmpeg can't draw captions itself */
+  tools: { ffmpeg: boolean; ffprobe: boolean; captions?: "libass" | "images" };
   worker: { current_job: string | null; queued: number };
   work_dir: string;
   privacy: { bind: string; model_downloads: boolean; llm_enabled: boolean };
@@ -397,6 +409,7 @@ export interface Dashboard {
     review: { project_id: string; name: string; campaign: string | null; n: number }[];
     render: { project_id: string; name: string; campaign: string | null; n: number }[];
     failed_renders: { id: string; title: string; project_id: string }[];
+    no_clips?: { id: string; name: string; campaign: string | null }[];
     ready: { campaign_id: string | null; name: string | null; n: number }[];
     failed_videos: { id: string; name: string; error: string | null }[];
     not_started: number;
@@ -574,6 +587,8 @@ export interface Campaign {
   posted_clips?: ReadyClip[];
   posted_total?: number;
   post_platforms?: Platform[];
+  /** totals of the fetched post numbers */
+  post_stats?: { views: number; likes: number; counted: number; links: number; at: number | null };
   outdated?: number;
   summary?: BriefSummary | null;
   exports?: { id: string; clip_id: string; path: string; created_at: number; title: string | null; project_id: string | null }[];

@@ -118,6 +118,7 @@ class UserSettings(BaseModel):
     auto_render: bool = True
     keep_intermediates: bool = False
     normalise_audio: bool = True
+    qa_check: bool = True  # quality check of every finished render (sound level, frozen/black picture, flashing)
     max_download_height: Literal[720, 1080] = 1080
     min_free_gb: float = Field(default=1.5, ge=0.2)
     # Downloads: "smart" fetches audio first, then only the video sections clips need (much less

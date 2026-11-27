@@ -129,6 +129,32 @@ def _friendly(e: Exception) -> MediaError:
     return MediaError("Couldn't access this video: " + msg.replace("ERROR: ", "")[:300])
 
 
+def post_stats(url: str) -> dict:
+    """Public view / like / comment counts of a published post (no login, nothing downloaded).
+    Adapted from nero-harsh/clipstudio. Raises MediaError with a plain reason when the site won't share them
+    (Instagram usually needs a login for this)."""
+    from yt_dlp import YoutubeDL
+
+    url = validate_url(url)
+    host = (urlparse(url).hostname or "").lower()
+    try:
+        # only the page details are needed: no format selection (a site may offer no downloadable format
+        # and still show the view count), short timeouts, one retry
+        o = {k: v for k, v in _opts(720).items() if k not in ("format", "merge_output_format", "outtmpl")}
+        o |= {"skip_download": True, "noplaylist": True, "socket_timeout": 10, "retries": 1, "extractor_retries": 1, "ignore_no_formats_error": True}
+        with YoutubeDL(o) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as e:
+        low = str(e).lower()
+        if "instagram" in host and ("login" in low or "rate" in low or "empty media" in low or "private" in low or "unable to extract" in low):
+            raise MediaError("Instagram didn't share the numbers (it often needs a login). Check them in the app.") from e
+        raise _friendly(e) from e
+    out = {k: int(info[src]) for src, k in (("view_count", "views"), ("like_count", "likes"), ("comment_count", "comments")) if info.get(src) is not None}
+    if not out:
+        raise MediaError("The site didn't share view counts for this post.")
+    return out
+
+
 def inspect(url: str, max_height: int = 1080) -> dict:
     """Fetch metadata without downloading."""
     from yt_dlp import YoutubeDL

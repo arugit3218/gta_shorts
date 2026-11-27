@@ -20,6 +20,13 @@ export default function Home() {
       return false;
     }
   });
+  const [capNoteHidden, setCapNoteHidden] = useState(() => {
+    try {
+      return localStorage.getItem("clipstudio.capNote.hidden") === "1";
+    } catch {
+      return false;
+    }
+  });
   const showGuide = !!data && !dismissed && (data.campaigns === 0 || data.projects === 0 || data.clips_approved === 0);
   const todos = data ? buildTodos(data) : [];
 
@@ -43,6 +50,27 @@ export default function Home() {
             <u>Free up space in Storage</u>
           </Link>{" "}
           or move the working folder to an external drive in Settings.
+        </Alert>
+      )}
+
+      {sys?.tools.captions === "images" && !capNoteHidden && (
+        <Alert kind="info" title="Captions are drawn as images on this Mac">
+          <span className="row wrap" style={{ gap: 10 }}>
+            This FFmpeg can't draw captions itself (common with Homebrew's FFmpeg), so ClipStudio draws them as images. They look the same; the small pop-in animation is simplified.
+            <button
+              className="btn sm ghost"
+              onClick={() => {
+                setCapNoteHidden(true);
+                try {
+                  localStorage.setItem("clipstudio.capNote.hidden", "1");
+                } catch {
+                  /* private mode */
+                }
+              }}
+            >
+              Got it
+            </button>
+          </span>
         </Alert>
       )}
 
@@ -175,6 +203,7 @@ function buildTodos(d: Dashboard): Todo[] {
   for (const c of t.campaign_setup) out.push({ key: `setup-${c.campaign_id}`, group: "fix", icon: "alert", tone: "warn", title: `Upload ${c.missing.join(" and ")}`, detail: `Campaign: ${c.name}. Its clips can't meet the brief without it.`, to: `/campaigns/${c.campaign_id}?tab=requirements`, cta: "Fix" });
   for (const v of t.failed_videos) out.push({ key: `fv-${v.id}`, group: "fix", icon: "x", tone: "danger", title: `Video failed: ${v.name}`, detail: v.error ?? undefined, to: `/projects/${v.id}`, cta: "Open" });
   for (const r of t.failed_renders) out.push({ key: `fr-${r.id}`, group: "fix", icon: "x", tone: "danger", title: `Render failed: ${r.title || "a clip"}`, to: `/clips/${r.id}`, cta: "Open" });
+  for (const v of t.no_clips ?? []) out.push({ key: `nc-${v.id}`, group: "review", icon: "scissors", tone: "warn", title: `No clips found in ${v.name}`, detail: `${v.campaign ? `${v.campaign} · ` : ""}nothing cleared your minimum score. Add one by hand, try AI picks, or lower the minimum.`, to: `/projects/${v.id}`, cta: "Open" });
   for (const r of t.review) out.push({ key: `rv-${r.project_id}`, group: "review", icon: "eye", tone: "accent", title: `${plural(r.n, "clip")} to approve or reject`, detail: where(r.name, r.campaign), to: `/projects/${r.project_id}`, cta: "Review" });
   for (const r of t.render) out.push({ key: `rn-${r.project_id}`, group: "render", icon: "refresh", tone: "accent", title: `${plural(r.n, "approved clip")} to render`, detail: where(r.name, r.campaign), to: `/projects/${r.project_id}`, cta: "Render" });
   for (const r of t.ready) out.push({ key: `rd-${r.campaign_id ?? "none"}`, group: "post", icon: "check", tone: "success", title: `${plural(r.n, "clip")} ready to post`, detail: r.name ? `Campaign: ${r.name}` : "No campaign", to: r.campaign_id ? `/campaigns/${r.campaign_id}?tab=queue` : "/projects", cta: "Post" });

@@ -395,8 +395,8 @@ def find_action_highlights(
     for c in cand:
         if len(chosen) >= want:
             break
-        if c.score.total < min_score and chosen:
-            break
+        if c.score.total < min_score:
+            break  # strict: no weak clip just to have one (lower the minimum to get more)
         if any(_overlap(c, o) > 0.15 for o in chosen):
             continue
         tk = set(c.text.lower().split())

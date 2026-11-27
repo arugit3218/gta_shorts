@@ -262,6 +262,14 @@ export default function SettingsPage() {
             <span>Normalise loudness (−14 LUFS, the usual level for social video)</span>
           </label>
           <label className="check">
+            <input type="checkbox" checked={s.qa_check} onChange={(e) => set("qa_check", e.target.checked)} />
+            <span>
+              Quality-check every render
+              <br />
+              <span className="small muted">Sound level, frozen or black picture, rapid flashing. Shown with each clip's checks. Adds a few seconds per render.</span>
+            </span>
+          </label>
+          <label className="check">
             <input type="checkbox" checked={s.auto_render} onChange={(e) => set("auto_render", e.target.checked)} />
             <span>Render clips automatically after analysis</span>
           </label>

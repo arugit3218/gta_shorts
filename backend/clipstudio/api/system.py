@@ -39,7 +39,7 @@ def system(c: AppContext = Depends(ctx), w: Worker = Depends(worker)):
         "mode": s.mode.value,
         "memory": {"total_mb": round(vm.total / MB), "available_mb": round(vm.available / MB), "percent": vm.percent},
         "disk": {"path": str(c.paths.work), "total_mb": round(du.total / MB), "free_mb": round(du.free / MB), "min_free_mb": round(s.min_free_gb * GB / MB), "low": du.free < s.min_free_gb * GB * 1.5},
-        "tools": ff.tools_available(),
+        "tools": ff.tools_available() | {"captions": _caption_backend()},
         "worker": {"current_job": cur, "queued": queued["n"] if queued else 0},
         "work_dir": str(c.paths.work),
         "privacy": {"bind": c.env.host, "model_downloads": c.env.allow_model_downloads, "llm_enabled": s.llm_enabled},
@@ -85,6 +85,16 @@ def dashboard(c: AppContext = Depends(ctx), w: Worker = Depends(worker)):
     }
 
 
+def _caption_backend() -> str:
+    """"libass" normally; "images" when this FFmpeg can't draw captions itself (Homebrew FFmpeg 8.x)."""
+    try:
+        from ..media.caption_png import backend_name
+
+        return backend_name()
+    except Exception:
+        return "libass"
+
+
 def _todo(c: AppContext) -> dict:
     """What needs the user's attention, for the Home to-do list (R3)."""
     from pathlib import Path as _P
@@ -122,6 +132,12 @@ def _todo(c: AppContext) -> dict:
             e["n"] += 1
     ready = sorted(counts.values(), key=lambda e: -e["n"])[:6]
     failed_videos = db.query("SELECT id, name, error FROM projects WHERE status = 'failed' ORDER BY updated_at DESC LIMIT 4")
+    # finished, but nothing cleared the minimum score (so it isn't in "review" either)
+    no_clips = db.query(
+        "SELECT p.id, p.name, cp.name AS campaign FROM projects p LEFT JOIN campaigns cp ON cp.id = p.campaign_id "
+        "WHERE p.status = 'ready' AND p.source_type != 'montage' AND NOT EXISTS (SELECT 1 FROM clips cl WHERE cl.project_id = p.id) "
+        "ORDER BY p.updated_at DESC LIMIT 4"
+    )
     refs = montage_refs(c)
     not_started = sum(1 for p in db.query("SELECT id, status, source_type FROM projects WHERE status = 'new'") if stage_of(p, refs) == "not_started")
     setup = []
@@ -140,6 +156,7 @@ def _todo(c: AppContext) -> dict:
         "failed_renders": failed_renders,
         "ready": ready,
         "failed_videos": failed_videos,
+        "no_clips": no_clips,
         "not_started": not_started,
         "campaign_setup": setup[:6],
     }

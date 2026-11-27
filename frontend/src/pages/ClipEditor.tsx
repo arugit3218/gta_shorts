@@ -1483,6 +1483,7 @@ function CampaignPanel({ clip, dirty, campaign, onClip }: { clip: Clip; dirty: b
   const c: Compliance | null = comp.data;
   // posted marks: shown at once after a click, then the clip reload catches up
   const [posted, setPosted] = useState<PostedMap | null>(null);
+  const [statsBusy, setStatsBusy] = useState(false);
   const serverPosted = JSON.stringify(clip.posted ?? {});
   useEffect(() => setPosted(null), [clip.id, serverPosted]); // the reloaded clip (or another tab's change) takes over
   const postedNow = posted ?? clip.posted ?? {};
@@ -1620,6 +1621,29 @@ function CampaignPanel({ clip, dirty, campaign, onClip }: { clip: Clip; dirty: b
           {state.n > 0 && <span className={`badge ${state.done ? "success" : "info"}`}>{state.done ? "Posted everywhere" : `${state.n} of ${state.total} done`}</span>}
         </div>
         <span className="small muted">After posting it in the app, mark it here (add the post's link if you like). Posted clips leave “Ready to post” and are never deleted by re-processing.</span>
+        {platforms.some((p) => postedNow[p]?.url) && (
+          <button
+            className="btn sm"
+            style={{ alignSelf: "flex-start" }}
+            disabled={statsBusy}
+            title="Read the public views, likes and comments from the post links. Instagram often doesn't share them without a login."
+            onClick={() =>
+              attempt(toast, async () => {
+                setStatsBusy(true);
+                try {
+                  const r = await api.refreshClipStats(clip.id);
+                  setPosted(r.posted);
+                  onClip();
+                  toast(r.failed ? (r.updated ? `Updated; ${r.failed} link couldn't be read` : "Couldn't read the numbers (hover “no stats” for why)") : "Views updated", r.failed && !r.updated ? "error" : "info");
+                } finally {
+                  setStatsBusy(false);
+                }
+              })
+            }
+          >
+            {statsBusy ? <Spinner /> : <Icon name="refresh" />} Refresh views
+          </button>
+        )}
         {platforms.map((p) => (
           <div className="posted-block" key={p}>
             <strong className="small">{PLATFORM_LABEL[p]}</strong>

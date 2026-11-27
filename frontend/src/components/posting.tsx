@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, media } from "../api";
-import { fmtDuration } from "../format";
+import { fmtAgo, fmtCount, fmtDuration } from "../format";
 import type { Campaign, Platform, PostedMap, ReadyClip } from "../types";
 import { CopyButton, PLATFORM_LABEL } from "./campaign";
 import { Icon } from "./Icon";
@@ -109,6 +109,15 @@ export function PostedControl({ clipId, platform, posted, onChange, compact = fa
         <Icon name="check" size={11} /> {compact ? `${PLATFORM_SHORT[platform]} · ` : "Posted "}
         {day(mine.at)}
       </span>
+      {mine.views != null ? (
+        <span className="badge" title={`${mine.views.toLocaleString()} views${mine.likes != null ? ` · ${mine.likes.toLocaleString()} likes` : ""}${mine.comments != null ? ` · ${mine.comments.toLocaleString()} comments` : ""}${mine.stats_at ? ` · checked ${fmtAgo(mine.stats_at)}` : ""}${mine.stats_error ? ` · last refresh failed: ${mine.stats_error}` : ""}`}>
+          <Icon name="eye" size={11} /> {fmtCount(mine.views)}
+        </span>
+      ) : mine.stats_error ? (
+        <span className="badge warn" title={mine.stats_error}>
+          <Icon name="alert" size={11} /> no stats
+        </span>
+      ) : null}
       {mine.url && (
         <a className="btn sm ghost icon" href={mine.url} target="_blank" rel="noreferrer" title={mine.url} aria-label="Open the post">
           <Icon name="link" />
@@ -187,6 +196,7 @@ export function PostQueue({ camp, onRefresh, goPosting }: { camp: Campaign; onRe
         </div>
       </div>
       <div className="card-body tight">
+        {view === "done" && done.length > 0 && <StatsBar camp={camp} onRefresh={onRefresh} />}
         {view === "todo" && todo.length > 0 && (
           <p className="small muted" style={{ margin: "10px 0 2px" }}>
             For each clip: <b>1</b> download the video, <b>2</b> copy the caption and post it in the app, <b>3</b> press <b>Mark posted</b>. Once it's marked on every platform it moves to Posted.
@@ -289,6 +299,50 @@ export function PostQueue({ camp, onRefresh, goPosting }: { camp: Campaign; onRe
         )}
       </div>
     </section>
+  );
+}
+
+/** Total views of the campaign's posts, and one button to fetch the latest numbers from every post link. */
+function StatsBar({ camp, onRefresh }: { camp: Campaign; onRefresh: () => Promise<void> }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const st = camp.post_stats;
+  const links = st?.links ?? 0;
+  return (
+    <div className="stats-bar">
+      <span className="small">
+        {st && st.counted > 0 ? (
+          <>
+            <b>{fmtCount(st.views)} views</b>
+            {st.likes ? ` · ${fmtCount(st.likes)} likes` : ""} across {plural(st.counted, "post")}
+            {st.at ? <span className="muted"> · checked {fmtAgo(st.at)}</span> : null}
+          </>
+        ) : links ? (
+          <span className="muted">Fetch the views of your {plural(links, "post link")} to see how this campaign is doing.</span>
+        ) : (
+          <span className="muted">Add each post's link (Add link) to track its views here.</span>
+        )}
+      </span>
+      <button
+        className="btn sm"
+        disabled={busy || !links}
+        title={links ? "Read the public views, likes and comments from each post link. Instagram often doesn't share them without a login." : "No post links yet"}
+        onClick={() =>
+          attempt(toast, async () => {
+            setBusy(true);
+            try {
+              const r = await api.refreshCampaignStats(camp.id);
+              toast(r.failed ? `Updated ${plural(r.updated, "post")}; ${r.failed} couldn't be read (hover “no stats” for why)` : `Updated ${plural(r.updated, "post")}`, r.failed && !r.updated ? "error" : "info");
+              await onRefresh();
+            } finally {
+              setBusy(false);
+            }
+          })
+        }
+      >
+        {busy ? <Spinner /> : <Icon name="refresh" />} {busy ? `Checking ${plural(Math.min(links, 25), "link")}…` : "Refresh stats"}
+      </button>
+    </div>
   );
 }
 

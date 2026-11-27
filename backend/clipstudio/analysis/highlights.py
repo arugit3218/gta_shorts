@@ -127,8 +127,8 @@ def find_highlights(
     for c in windows:
         if len(chosen) >= want:
             break
-        if c.score.total < min_score and chosen:
-            break
+        if c.score.total < min_score:
+            break  # strict: no weak clip just to have one (lower the minimum to get more)
         if any(_overlap(c, o) > 0.15 for o in chosen):
             continue
         toks = set(content_tokens(" ".join(w.w for w in t.words[c.w0 : c.w1])))
@@ -155,6 +155,11 @@ def find_highlights(
 
 
 def few_reason(got: int, want: int, min_score: float) -> str:
+    if got == 0:
+        return (
+            f"No moment scored above your minimum quality ({min_score:.0f}/100), so no weak clip was made. "
+            "Add a clip by hand, try AI picks, or lower “Minimum score” in Settings → Basics and re-process."
+        )
     return (
         f"{got} of the {want} clips you asked for: only {got} separate moments scored above the minimum quality "
         f"({min_score:.0f}/100). Weak moments are skipped rather than padded. Lower “Minimum score” in Settings → Basics to get more."

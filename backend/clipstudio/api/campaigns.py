@@ -205,6 +205,12 @@ def _public(c: AppContext, row: dict, *, detail: bool = False) -> dict:
         out["posted_clips"] = q["posted"]
         out["posted_total"] = q["posted_total"]
         out["post_platforms"] = q["platforms"]
+        st = c.db.one(
+            "SELECT SUM(po.views) AS views, SUM(po.likes) AS likes, COUNT(po.views) AS counted, SUM(po.url IS NOT NULL) AS links, MAX(CASE WHEN po.stats_error IS NULL THEN po.stats_at END) AS at "
+            "FROM posts po JOIN clips cl ON cl.id = po.clip_id JOIN projects p ON p.id = cl.project_id WHERE p.campaign_id = ?",
+            (row["id"],),
+        ) or {}
+        out["post_stats"] = {"views": st.get("views") or 0, "likes": st.get("likes") or 0, "counted": st.get("counted") or 0, "links": st.get("links") or 0, "at": st.get("at")}
         out["outdated"] = len(_outdated(c, row["id"]))
         out["summary"] = summarise_brief(brief, brief.brief_sources) if brief.raw_brief.strip() else None
         out["exports"] = c.db.query(
@@ -446,6 +452,20 @@ def _outdated(c: AppContext, cid: str) -> list[dict]:
         (cid,),
     )
     return [r for r in rows if r["id"] not in done]
+
+
+@router.post("/campaigns/{cid}/posts/stats")
+def refresh_campaign_stats(cid: str, c: AppContext = Depends(ctx)):
+    """Fetch the public numbers of the campaign's post links (the newest 25)."""
+    get_campaign(c, cid)
+    rows = c.db.query(
+        "SELECT po.clip_id, po.platform, po.url FROM posts po JOIN clips cl ON cl.id = po.clip_id JOIN projects p ON p.id = cl.project_id "
+        "WHERE p.campaign_id = ? AND po.url IS NOT NULL ORDER BY po.posted_at DESC LIMIT 25",
+        (cid,),
+    )
+    if not rows:
+        raise InvalidInput("No post links yet. Add the link when you mark a clip as posted.")
+    return posting.refresh_stats(c.db, rows)
 
 
 @router.post("/campaigns/{cid}/rerender-outdated")

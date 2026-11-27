@@ -207,8 +207,8 @@ def merge_candidates(speech: list[Candidate], action: list[Candidate], duration:
     for c in pool:
         if len(out) >= want:
             break
-        if c.score.total < min_score and out:
-            break
+        if c.score.total < min_score:
+            break  # strict: no weak clip just to have one (lower the minimum to get more)
         if any(_overlap(c, o) > 0.15 for o in out):
             continue
         out.append(c)
@@ -498,7 +498,10 @@ def run_process(ctx: AppContext, job: dict, cancel: CancelToken) -> None:
                 candidates = merge_candidates(candidates, acands, duration, opts["max_clips"], opts["min_score"])
                 stats = stats | {"windows": stats.get("windows", 0) + astats.get("windows", 0), "action": len([c for c in candidates if c.extras.get("mode") == "action"])}
                 if not candidates:
-                    stats["reason"] = astats.get("reason") or stats.get("reason")
+                    from ..analysis.highlights import few_reason
+
+                    # moments of either kind existed but none was strong enough → say that, not "no action peaks"
+                    stats["reason"] = few_reason(0, target_count(duration, opts["max_clips"]), opts["min_score"]) if stats["windows"] else (astats.get("reason") or stats.get("reason"))
                 elif len(candidates) < target_count(duration, opts["max_clips"]):
                     from ..analysis.highlights import few_reason
 
@@ -507,8 +510,9 @@ def run_process(ctx: AppContext, job: dict, cancel: CancelToken) -> None:
                     stats.pop("reason", None)
             prog.done("highlights", f"{stats['windows']:,} windows evaluated" + (f" · {stats['action']} action moments" if stats.get("action") else "") + (" · using YouTube 'Most replayed'" if stats.get("heatmap") else ""))
             prog.start("score")
-            if not candidates:
+            if not candidates and not stats.get("windows"):  # no moment of that length at all: a real failure
                 raise ClipStudioError(stats.get("reason") or f"No {dmin:.0f}–{dmax:.0f}s moments found. Try a different clip length.")
+            # moments existed but none cleared the minimum score: finish with no clips and say why
             prog.done("score", f"{len(candidates)} clip{'' if len(candidates) == 1 else 's'} selected" + (f" — {stats['reason']}" if stats.get("reason") else ""))
 
         # 7. Metadata (extractive; optional local LLM) -----------------------------------
@@ -528,7 +532,8 @@ def run_process(ctx: AppContext, job: dict, cancel: CancelToken) -> None:
         kept: list[dict] = []
         posted = posted_ids(db)
         for old in db.query("SELECT id, rank, start, \"end\", status, analysis, render_path, thumb_path FROM clips WHERE project_id = ?", (project["id"],)):
-            if old["id"] in posted or (keep and (old["status"] == "approved" or (old["analysis"] or {}).get("origin") in ("manual", "ai"))):
+            # nothing new cleared the minimum score: keep every existing clip rather than leave the video empty
+            if not candidates or old["id"] in posted or (keep and (old["status"] == "approved" or (old["analysis"] or {}).get("origin") in ("manual", "ai"))):
                 kept.append(old)
                 continue
             for p in (old["render_path"], old["thumb_path"]):
@@ -804,7 +809,9 @@ def render_one(ctx: AppContext, project: dict, clip: dict, cancel: CancelToken, 
 
         try:
             r = render_variant(ctx, project, clip, cancel, on_progress)
-            db.update("clips", clip["id"], {"render_status": "done", "render_path": r["render_path"], "thumb_path": r["thumb_path"], "analysis": clip["analysis"] | r["analysis"]})
+            silent = ((clip.get("edit") or {}).get("montage") or {}).get("audio", "song") == "silent"
+            analysis = clip["analysis"] | r["analysis"] | {"qa": quality_check(settings, Path(r["render_path"]), not silent, song=True)}
+            db.update("clips", clip["id"], {"render_status": "done", "render_path": r["render_path"], "thumb_path": r["thumb_path"], "analysis": analysis})
         except Exception as e:
             db.update("clips", clip["id"], {"render_status": "failed" if not cancel.cancelled else "pending", "render_error": str(e)[:500]})
             raise
@@ -829,11 +836,28 @@ def render_one(ctx: AppContext, project: dict, clip: dict, cancel: CancelToken, 
             "stream": res.stream,
             "polish_used": res.polish,
             "output_duration": res.out_duration or round(spec.duration, 3),
+            # silence on purpose (original muted for an in-app sound, no music) isn't a problem
+            # music / campaign sound are only mixed into a source that has an audio track
+            "qa": quality_check(settings, out, spec.has_audio and (spec.original_volume > 0.01 or bool(spec.music or spec.sound))),
         }
         db.update("clips", clip["id"], {"render_status": "done", "render_path": str(out), "thumb_path": str(thumb), "analysis": analysis})
     except Exception as e:
         db.update("clips", clip["id"], {"render_status": "failed" if not cancel.cancelled else "pending", "render_error": str(e)[:500]})
         raise
+
+
+def quality_check(settings: UserSettings, path: Path, has_audio: bool, song: bool = False) -> dict | None:
+    """Quality check of the finished file (sound level, frozen / black picture, flashing). Never fails a render.
+    ``song``: the audio is a mastered song (music edits), loud by design: only silence is reported."""
+    if not settings.qa_check:
+        return None
+    try:
+        from ..media.qa import check
+
+        return check(path, has_audio=has_audio, song=song)
+    except Exception as e:  # a check that can't run is reported as "not checked", not as a broken clip
+        log.warning("Quality check failed for %s: %s", path.name, e)
+        return None
 
 
 def render_cold_open(spec: RenderSpec, out: Path, clip: dict, *, on_progress=None, cancel: CancelToken, face_track: bool = True) -> RenderResult | None:
@@ -864,6 +888,7 @@ def render_cold_open(spec: RenderSpec, out: Path, clip: dict, *, on_progress=Non
         progress_span=(0.0, split),
         music_fade_out=False,
         hook=replace(spec.hook, duration=min(spec.hook.duration, b - a)) if spec.hook else None,
+        end_text=None,  # the end text belongs to the end of the whole clip (the main part), not the teaser
     )
     whoosh = [Cue("whoosh", 0.0)] if "whoosh" in spec.sfx_files else []
     main = replace(

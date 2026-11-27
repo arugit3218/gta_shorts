@@ -44,6 +44,7 @@ class ClipFacts:
     end_required: bool = False  # the campaign asks for end text on every clip
     caption_logo_overlap: float = 0.0  # share of the caption block the logo sits on
     caption_set_by_clip: bool = False
+    qa: dict | None = None  # quality check of the current render (media/qa.py)
     disclosure_on_screen: str = ""
     transcript: str = ""
     title: str = ""
@@ -156,6 +157,20 @@ def check_clip(brief: Brief | None, f: ClipFacts) -> list[Check]:
                     elif ui > b.logo.max_ui_cover * 0.8 or ng > b.logo.max_nogo_overlap * 0.8:
                         st = "warn"
                     out.append(Check(f"logo_safe_{p}", f"Logo safe zone · {LABELS[p]}", st, "; ".join(msgs)))
+
+    # Quality of the rendered file ------------------------------------------------------
+    if f.rendered and not f.stale and f.qa:
+        for group, label, ok_text in (("sound", "Sound level", "Loud enough, no crackle"), ("picture", "Picture", "No frozen or black stretches"), ("flashing", "No rapid flashing", "Safe for photosensitive viewers")):
+            found = [i for i in f.qa.get("issues", []) if i.get("group") == group]
+            if group == "sound" and not f.qa.get("audio_checked", True):
+                out.append(Check("qa_sound", label, "info", "Not checked: this clip is silent on purpose (the sound is added in the app)."))
+                continue
+            if not found:
+                detail = ok_text + (f" ({f.qa['lufs']:.1f} LUFS)" if group == "sound" and f.qa.get("lufs") is not None else "")
+                out.append(Check(f"qa_{group}", label, "pass", detail))
+            else:
+                worst = "fail" if any(i["level"] == "fail" for i in found) else "warn"
+                out.append(Check(f"qa_{group}", label, worst, " ".join(i["message"] for i in found[:3])))
 
     # Text vs logo ------------------------------------------------------------------
     if f.logo_enabled and f.caption_text and f.logo_mask is not None and f.logo_mask.any():

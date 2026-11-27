@@ -95,6 +95,12 @@ MIGRATIONS = [
     ("projects", "campaign_id", "TEXT"),
     ("projects", "audio_path", "TEXT"),
     ("projects", "extra", "TEXT NOT NULL DEFAULT '{}'"),
+    # public stats fetched from a post's link ("Refresh stats")
+    ("posts", "views", "INTEGER"),
+    ("posts", "likes", "INTEGER"),
+    ("posts", "comments", "INTEGER"),
+    ("posts", "stats_at", "REAL"),
+    ("posts", "stats_error", "TEXT"),
 ]
 
 

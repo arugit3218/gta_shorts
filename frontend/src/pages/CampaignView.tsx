@@ -10,7 +10,7 @@ import { CoverageStatus, LogoPlacer, captionLogoOverlap } from "../components/lo
 import { LAYOUT_OPTIONS } from "../components/framing";
 import { IntensityPicker, MiniPhone, StylePicker, campaignOptions, describeStyle, styleOf, type Intensity, type StyleKey } from "../components/styles";
 import { Alert, Bar, Modal, Spinner, StatusBadge, attempt, plural, useDialogs, useToast } from "../components/ui";
-import { fmtDuration } from "../format";
+import { fmtCount, fmtDuration } from "../format";
 import { usePoll } from "../hooks";
 import type { Brief, Campaign, Platform } from "../types";
 
@@ -138,6 +138,7 @@ export default function CampaignView() {
           <p className="sub">
             {plural(camp.projects, "video")} · {plural(camp.clips, "clip")} · {camp.approved} approved · {camp.ready_total ?? ready.length} ready to post
             {(camp.posted_total ?? 0) > 0 && ` · ${camp.posted_total} posted`}
+            {(camp.post_stats?.counted ?? 0) > 0 && ` · ${fmtCount(camp.post_stats!.views)} views`}
           </p>
         </div>
         <div className="row wrap">

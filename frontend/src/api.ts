@@ -135,6 +135,8 @@ export const api = {
   exportClip: (id: string) => req<{ path: string; verdict: string; files: string[] }>("POST", `/clips/${id}/export`),
   markPosted: (id: string, platform: Platform, url?: string) => req<{ posted: PostedMap }>("PUT", `/clips/${id}/posts/${platform}`, { url: url || null }),
   unmarkPosted: (id: string, platform: Platform) => req<{ posted: PostedMap }>("DELETE", `/clips/${id}/posts/${platform}`),
+  refreshClipStats: (id: string) => req<{ updated: number; failed: number; posted: PostedMap }>("POST", `/clips/${id}/posts/stats`),
+  refreshCampaignStats: (id: string) => req<{ updated: number; failed: number }>("POST", `/campaigns/${id}/posts/stats`),
   // campaigns
   campaignPresets: () => req<CampaignPreset[]>("GET", "/campaign-presets"),
   safeZones: () => req<SafeZones>("GET", "/safe-zones"),

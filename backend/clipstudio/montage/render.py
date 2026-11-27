@@ -13,7 +13,7 @@ from ..errors import MediaError
 from ..media import ffmpeg as ff
 from ..media.logo import logo_filter, logo_input_args
 from ..media.overlays import DisclosureText, build_overlay_ass
-from ..media.render import AFMT, Inputs, _ass_filter, _link_fonts, _run_in
+from ..media.render import AFMT, Inputs, _link_fonts, _run_in, ass_layer
 
 FPS = 30
 
@@ -86,8 +86,7 @@ def render_montage(
         cur = "vc"
         overlay = build_overlay_ass(w, h, hook=None, disclosure=disclosure, clip_duration=L, pov=pov)
         if overlay:
-            (workdir / "overlay.ass").write_text(overlay, encoding="utf-8")
-            chains.append(f"[{cur}]{_ass_filter('overlay.ass', workdir)}[vo]")
+            chains.append(ass_layer("overlay", overlay, workdir, cur, "vo", L))
             cur = "vo"
         if logo and logo.get("file"):
             li = inputs.add(logo_input_args(logo, FPS))
@@ -98,7 +97,7 @@ def render_montage(
         if audio == "song" and song is not None:
             ai = inputs.add(["-ss", f"{plan['song_start']:.3f}", "-t", f"{L + 0.2:.3f}", "-i", str(song)])
             fo = max(0.0, L - 0.5)
-            chains.append(f"[{ai}:a]{AFMT},afade=t=out:st={fo:.2f}:d=0.5,alimiter=limit=0.95,aresample=48000[a]")
+            chains.append(f"[{ai}:a]{AFMT},afade=t=out:st={fo:.2f}:d=0.5,alimiter=limit=0.95:level=disabled,aresample=48000[a]")
             maps += ["-map", "[a]", "-c:a", "aac", "-b:a", "192k"]
         (workdir / "graph.txt").write_text(";".join(chains))
         part = out_path.with_name(out_path.stem + ".part.mp4")
