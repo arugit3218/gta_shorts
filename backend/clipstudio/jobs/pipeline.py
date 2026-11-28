@@ -751,7 +751,7 @@ def render_spec(ctx: AppContext, project: dict, clip: dict, *, cancel: CancelTok
         auto_stream=settings.auto_stream,
         words=words,
         style=caption_style_for(ctx, clip, brief)[0].model_copy(update={"position": tl["caption_position"]}),
-        captions=bool(edit.get("captions", True)),
+        captions=feat["captions"],
         normalise_audio=settings.normalise_audio,
         max_fps=60.0 if settings.mode.value == "high" else 30.0,
         encoder="x264" if x264 else "videotoolbox",

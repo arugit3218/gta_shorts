@@ -489,6 +489,7 @@ function ClipEditorInner({ id }: { id: string }) {
                   <EdSection title="Captions" hint="The words on screen. Fix any mistakes here.">
                     {wordsQ.data ? (
                       <CaptionsPanel
+                        captionsOff={campaign?.brief.captions === false}
                         words={wordsQ.data}
                         draft={draft}
                         set={set}
@@ -699,7 +700,7 @@ function TrimPanel({ clip, words, draft, set }: { clip: Clip; words: ClipWords; 
 // -------------------------------------------------------------------------------- captions
 const LINE_WORDS = 7;
 
-function CaptionsPanel({ words, draft, set, onReset }: { words: ClipWords; draft: Draft; set: <K extends keyof Draft>(k: K, v: Draft[K]) => void; onReset: () => void }) {
+function CaptionsPanel({ words, draft, set, onReset, captionsOff }: { captionsOff: boolean; words: ClipWords; draft: Draft; set: <K extends keyof Draft>(k: K, v: Draft[K]) => void; onReset: () => void }) {
   const base = draft.words ?? words.words;
   const lines = useMemo(() => {
     const out: Word[][] = [];
@@ -751,8 +752,8 @@ function CaptionsPanel({ words, draft, set, onReset }: { words: ClipWords; draft
         </div>
       </div>
       <label className="check">
-        <input type="checkbox" checked={draft.captions} onChange={(e) => set("captions", e.target.checked)} />
-        <span>Burn captions into the video</span>
+        <input type="checkbox" checked={draft.captions && !captionsOff} disabled={captionsOff} onChange={(e) => set("captions", e.target.checked)} />
+        <span>Burn captions into the video{captionsOff ? " (turned off in the campaign)" : ""}</span>
       </label>
       <div className="stack sm">
         {lines.map((l, i) => (

@@ -200,7 +200,7 @@ export const media = {
   clipsZip: (projectId: string, ids?: string[]) => `/api/projects/${projectId}/clips.zip${ids?.length ? `?ids=${ids.join(",")}` : ""}`,
   frame: (projectId: string, t?: number, v?: number) => `/api/projects/${projectId}/frame?${t != null ? `t=${t}&` : ""}v=${v ?? 0}`,
   exportZip: (clipId: string) => `/api/clips/${clipId}/export.zip`,
-  logo: (campaignId: string, v?: number) => `/api/campaigns/${campaignId}/logo?v=${v ?? 0}`,
+  logo: (campaignId: string, v?: number, full?: boolean) => `/api/campaigns/${campaignId}/logo?v=${v ?? 0}${full ? "&full=true" : ""}`,
   sound: (campaignId: string, sid: string) => `/api/campaigns/${campaignId}/sounds/${sid}/audio`,
   music: (mood: string, name: string) => `/api/library/music/${mood}/${encodeURIComponent(name)}`,
   sfx: (kind: string) => `/api/sfx/${kind}`,

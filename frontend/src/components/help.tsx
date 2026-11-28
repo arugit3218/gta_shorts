@@ -12,7 +12,7 @@ export const HELP: Record<string, { title: string; body: string }> = {
   },
   logo_mode: {
     title: "Logo",
-    body: "“Brand's template file” is a full-screen transparent image (often called LOGO_PRE_PLACED) that goes over the whole video exactly as supplied: it can't be moved. “Place a logo image” is a normal logo you drag onto the frame.",
+    body: "“Brand's template file” is a full-screen transparent image or video (often called LOGO_PRE_PLACED) that goes over the whole video exactly as supplied: it can't be moved. “Place a logo” is a logo image or video you drag onto the frame. Videos loop for the whole clip without their sound.",
   },
   clip_length: {
     title: "Clip length",

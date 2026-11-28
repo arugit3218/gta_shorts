@@ -2,11 +2,14 @@
 
 import io
 import json
+import subprocess
 import zipfile
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+from clipstudio.media import ffmpeg as ff
 
 from tests.test_api import app_ctx, client, sample_video, seed_transcript, upload, wait_job  # noqa: F401
 
@@ -216,3 +219,37 @@ def test_smart_download_sections(client, app_ctx, sample_video, tmp_path, monkey
     assert client.get(f"/api/clips/{clips[0]['id']}/source").status_code == 200
     st = client.get("/api/storage").json()
     assert any(p["smart"] for p in st["projects"])
+
+
+def test_video_logo_upload(client, tmp_path):  # noqa: F811
+    cid = client.post("/api/campaigns", json={"preset": "generic_logo"}).json()["id"]
+    p = tmp_path / "logo.mov"  # transparent 9:16 video; the preset already says "place it"
+    src = "color=red:s=1080x1920:d=1:r=10,format=rgba,colorchannelmixer=aa=0,drawbox=x=100:y=100:w=300:h=200:color=red@1:t=fill:replace=1"
+    subprocess.run([ff.FFMPEG, "-v", "error", "-f", "lavfi", "-i", src, "-c:v", "qtrle", str(p)], check=True)
+    r = client.post(f"/api/campaigns/{cid}/logo?filename=logo.mov", content=p.read_bytes(), headers={"Content-Type": "application/octet-stream"})
+    assert r.status_code == 200, r.text
+    lg = r.json()["brief"]["logo"]
+    assert lg["has_file"] and lg["animated"] and lg["mode"] == "free" and (lg["image_w"], lg["image_h"]) == (300, 200)
+    still = client.get(f"/api/campaigns/{cid}/logo")
+    assert still.status_code == 200 and still.content.startswith(b"\x89PNG")
+    assert client.delete(f"/api/campaigns/{cid}/logo").status_code == 200
+    assert client.get(f"/api/campaigns/{cid}/logo").status_code == 404
+
+
+def test_green_screen_video_logo(client, tmp_path):  # noqa: F811
+    cid = client.post("/api/campaigns", json={"preset": "generic_logo"}).json()["id"]
+    p = tmp_path / "band.mp4"  # green screen on top, brand band at the bottom
+    src = "color=0x2BD93E:s=1080x1920:d=1:r=10,drawbox=x=0:y=1320:w=1080:h=600:color=0x25263A:t=fill"
+    subprocess.run([ff.FFMPEG, "-v", "error", "-f", "lavfi", "-i", src, "-pix_fmt", "yuv420p", str(p)], check=True)
+    r = client.post(f"/api/campaigns/{cid}/logo?filename=band.mp4", content=p.read_bytes(), headers={"Content-Type": "application/octet-stream"})
+    assert r.status_code == 200, r.text
+    lg = r.json()["brief"]["logo"]
+    assert lg["mode"] == "free" and lg["width"] == 1.0 and lg["image_w"] == 1080 and 590 <= lg["image_h"] <= 610
+    assert abs(lg["y"] - 1620 / 1920) < 0.01
+    assert any("Green screen" in n for n in r.json()["notes"])
+    part = cv2.imdecode(np.frombuffer(client.get(f"/api/campaigns/{cid}/logo").content, np.uint8), cv2.IMREAD_UNCHANGED)
+    assert part.shape[:2] == (lg["image_h"], 1080)
+    patched = client.patch(f"/api/campaigns/{cid}", json={"brief": {"captions": False, "logo": {"width": 0.5}}}).json()["brief"]
+    assert patched["captions"] is False and patched["logo"]["width"] == 0.5 and patched["logo"]["crop"] == lg["crop"]
+    still = cv2.imdecode(np.frombuffer(client.get(f"/api/campaigns/{cid}/logo?full=true").content, np.uint8), cv2.IMREAD_UNCHANGED)
+    assert still[400, 540, 3] == 0 and still[1600, 540, 3] == 255
