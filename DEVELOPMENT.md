@@ -1,5 +1,17 @@
 # Development log
 
+## Video logos (merged from mp1711) + two additions (2026-11-28)
+
+- Merged branch `video-logo-campaigns` by mp1711:
+    - Video logos (MP4/MOV/M4V/WebM), transparent or green screen (auto-detected and removed).
+    - The visible part of the logo is cropped, and it can be placed and resized like image logos (new Size slider).
+    - Logo videos loop without sound.
+    - Campaign-wide "Show captions? On/Off".
+- Added on top:
+    - **Cleaner green-screen edges.** The key is now applied at the logo's own size, before scaling, plus `despill=type=green` (`media/logo.py` `key_filter` / `logo_filter`). Keying after a resize left a thin green outline.
+    - **"No captions" for selected clips.** The video page's Captions dialog has Set the height / Automatic / No captions. `BulkClipEdit.captions` sets `edit.captions`; choosing a height or Automatic turns captions back on. The dialog notes when the campaign has captions off, and clip cards say "no captions".
+- Not run here (the user tests): no new automated tests were run for the two additions.
+
 ## Round 5: ideas adapted from nero-harsh/clipstudio (2026-11-28)
 
 Rebuilt in this codebase with his code as the reference; nothing was copied wholesale.

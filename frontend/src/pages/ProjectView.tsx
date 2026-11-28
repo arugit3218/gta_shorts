@@ -450,7 +450,7 @@ export default function ProjectView() {
                     <button className="btn sm" disabled={busy} onClick={() => setRecipe("selected")} title="Apply a saved look to just these clips">
                       <Icon name="zap" /> Apply recipe
                     </button>
-                    <button className="btn sm" disabled={busy} onClick={() => setCapPos(true)} title="Move the captions of just these clips">
+                    <button className="btn sm" disabled={busy} onClick={() => setCapPos(true)} title="Move or turn off the captions of just these clips">
                       <Icon name="type" /> Captions
                     </button>
                   </>
@@ -540,14 +540,17 @@ export default function ProjectView() {
 function CaptionPositionDialog({ project, clips, onClose, onDone }: { project: Project; clips: Clip[]; onClose: () => void; onDone: () => void }) {
   const toast = useToast();
   const first = clips[0]?.features?.text_layout?.caption_position ?? 0.7;
-  const [mode, setMode] = useState<"auto" | "set">("set");
+  const [mode, setMode] = useState<"auto" | "set" | "off">("set");
+  // the campaign switched captions off: clip settings only matter once it turns them back on
+  const campaignOff = clips.some((c) => c.features?.captions === false && c.edit.captions !== false);
   const [y, setY] = useState(Math.round(first * 100) / 100);
   const [busy, setBusy] = useState(false);
   const rendered = clips.filter((c) => c.has_video).length;
   const go = async () => {
     setBusy(true);
     try {
-      const what = mode === "auto" ? { caption_position_auto: true } : { caption_position: y };
+      // setting a height (or automatic) also turns captions back on for clips that had them off
+      const what = mode === "off" ? { captions: false } : mode === "auto" ? { caption_position_auto: true, captions: true } : { caption_position: y, captions: true };
       // only clips that already have a video re-render; the others pick it up when they're rendered
       const withVideo = clips.filter((c) => c.has_video).map((c) => c.id);
       const without = clips.filter((c) => !c.has_video).map((c) => c.id);
@@ -559,7 +562,8 @@ function CaptionPositionDialog({ project, clips, onClose, onDone }: { project: P
         rendering += r.rendering;
       }
       if (without.length) updated += (await api.bulkClips(project.id, { ids: without, render: false, ...what })).updated;
-      toast(updated ? `Captions moved on ${plural(updated, "clip")}${rendering ? `, ${rendering} re-rendering` : ""}` : "Nothing to change: those clips already use this");
+      const did = mode === "off" ? "Captions turned off on" : "Captions set on";
+      toast(updated ? `${did} ${plural(updated, "clip")}${rendering ? `, ${rendering} re-rendering` : ""}` : "Nothing to change: those clips already use this");
       onDone();
       onClose();
     } catch (e) {
@@ -590,8 +594,15 @@ function CaptionPositionDialog({ project, clips, onClose, onDone }: { project: P
           <button className={mode === "auto" ? "active" : ""} onClick={() => setMode("auto")}>
             Automatic
           </button>
+          <button className={mode === "off" ? "active" : ""} onClick={() => setMode("off")}>
+            No captions
+          </button>
         </div>
-        {mode === "set" ? (
+        {mode === "off" ? (
+          <p className="small muted" style={{ margin: 0 }}>
+            These clips will have no captions. The title text, end text and logo stay. Choose a height or Automatic later to bring captions back.
+          </p>
+        ) : mode === "set" ? (
           <div className="field">
             <label htmlFor="bulk-cap">Captions {Math.round(y * 100)}% from the top</label>
             <input id="bulk-cap" type="range" min={0.1} max={0.92} step={0.01} value={y} onChange={(e) => setY(+e.target.value)} />
@@ -602,7 +613,8 @@ function CaptionPositionDialog({ project, clips, onClose, onDone }: { project: P
             Back to the campaign's caption position (or the caption look's own), moved clear of the logo when they'd overlap.
           </p>
         )}
-        {rendered > 0 && <span className="small muted">{plural(rendered, "rendered clip")} will re-render with the new position.</span>}
+        {campaignOff && mode !== "off" && <Alert kind="info">Captions are turned off for this video's campaign, so they won't show until the campaign turns them back on (Requirements → Text on the video).</Alert>}
+        {rendered > 0 && <span className="small muted">{plural(rendered, "rendered clip")} will re-render{mode === "off" ? " without captions" : " with the new setting"}.</span>}
       </div>
     </Modal>
   );
@@ -787,7 +799,8 @@ function Applied({ clip: c }: { clip: Clip }) {
   const bits: string[] = [];
   const montage = a.mode === "montage";
   if (montage) bits.push("cut on the beat");
-  else if (c.edit.captions !== false) bits.push("captions");
+  else if (c.edit.captions !== false && f?.captions !== false) bits.push("captions");
+  else bits.push("no captions");
   if (f?.logo) bits.push("logo");
   if (!montage && f?.hook_overlay?.enabled) bits.push("title text");
   const pu = a.polish_used;

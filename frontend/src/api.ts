@@ -99,7 +99,7 @@ export const api = {
   importPath: (path: string, campaign_id?: string | null) => req<Project>("POST", "/projects/import-path", { path, campaign_id: campaign_id || null }),
   patchProject: (id: string, patch: { name?: string; campaign_id?: string; stream_layout?: StreamLayout; clear_stream_layout?: boolean }) => req<Project>("PATCH", `/projects/${id}`, patch),
   detectFacecam: (id: string) => req<{ cam: [number, number, number, number] | null; samples: number; found: boolean }>("POST", `/projects/${id}/detect-facecam`),
-  bulkClips: (id: string, body: { layout?: Layout; aspect_ratio?: string; output_height?: 720 | 1080; scope?: "all" | "approved" | "unrejected"; ids?: string[]; render?: boolean; recipe_id?: string; caption_position?: number; caption_position_auto?: boolean }) =>
+  bulkClips: (id: string, body: { layout?: Layout; aspect_ratio?: string; output_height?: 720 | 1080; scope?: "all" | "approved" | "unrejected"; ids?: string[]; render?: boolean; recipe_id?: string; caption_position?: number; caption_position_auto?: boolean; captions?: boolean }) =>
     req<{ updated: number; rendering: number }>("POST", `/projects/${id}/clips/bulk`, body),
   addClip: (id: string, body: { start: number; end: number; title?: string; render?: boolean }) => req<Clip>("POST", `/projects/${id}/clips`, body),
   aiPrompt: (id: string) => req<{ prompt: string; chars: number; sentences: number }>("GET", `/projects/${id}/ai-prompt`),

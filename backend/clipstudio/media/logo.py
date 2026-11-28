@@ -63,8 +63,10 @@ def decoder_args(path: Path | str) -> list[str]:
 
 
 def key_filter(key: str | None) -> str:
-    """Filter step (to append after scaling) that makes the green-screen colour ``key`` transparent."""
-    return f",format=rgba,colorkey={key}:{KEY_SIMILARITY}:{KEY_BLEND}" if key else ""
+    """Filter step that makes the green-screen colour ``key`` transparent and takes the green tint ("spill")
+    off the edges that remain. For rendering, put it before scaling (see ``logo_filter``): keying the
+    original pixels gives clean edges, while keying after a resize leaves a thin green outline."""
+    return f",format=rgba,colorkey={key}:{KEY_SIMILARITY}:{KEY_BLEND},despill=type=green" if key else ""
 
 
 def detect_green_screen(frames: np.ndarray) -> str | None:
@@ -229,11 +231,12 @@ def logo_filter(logo: dict, idx: int, out_w: int, out_h: int, fps: float, src_la
     alpha = logo.get("opacity", 1.0)
     fade = f",colorchannelmixer=aa={alpha:.3f}" if alpha < 0.999 else ""
     key = key_filter(logo.get("key_color"))
+    # the green screen is removed at the logo's own size, then the clean result is resized
     if logo.get("mode") == "template":
-        prep = f"[{idx}:v]fps={fps:g},scale={out_w}:{out_h}:flags=lanczos{key},format=rgba{fade}[lg]"
+        prep = f"[{idx}:v]fps={fps:g}{key},scale={out_w}:{out_h}:flags=lanczos,format=rgba{fade}[lg]"
         pos = "0:0"
     else:
         lw, lh, x, y = free_placement(logo, out_w, out_h)
-        prep = f"[{idx}:v]{crop_filter(logo.get("crop"))}fps={fps:g},scale={lw}:{lh}:flags=lanczos{key},format=rgba{fade}[lg]"
+        prep = f"[{idx}:v]{crop_filter(logo.get("crop"))}fps={fps:g}{key},scale={lw}:{lh}:flags=lanczos,format=rgba{fade}[lg]"
         pos = f"{x}:{y}"
     return f"{prep};[{src_label}][lg]overlay={pos}:eof_action=repeat:shortest=0:format=auto[{out_label}]"

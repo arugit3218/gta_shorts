@@ -135,6 +135,7 @@ class BulkClipEdit(BaseModel):
     recipe_id: str | None = Field(None, max_length=40)  # apply a saved recipe's look to every clip
     caption_position: float | None = Field(None, ge=0.1, le=0.92)  # where captions sit (centre, fraction of height)
     caption_position_auto: bool = False  # drop the clips' own caption position: back to the campaign / look, clear of the logo
+    captions: bool | None = None  # turn captions off (False) or back on (True) for these clips
 
 
 

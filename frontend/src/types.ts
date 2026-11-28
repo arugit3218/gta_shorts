@@ -194,6 +194,8 @@ export interface ClipFeatures {
   original_volume: number;
   locked: string[];
   polish: Polish;
+  /** false when this clip or its campaign has captions turned off */
+  captions?: boolean;
   /** where captions / title text / end text actually go (kept clear of the logo) */
   text_layout: TextLayout;
 }
